@@ -234,6 +234,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <canvas id="dbgEyes" width="320" height="107"></canvas>
     <canvas id="dbgCanvas" width="320" height="320"></canvas>
     <div id="dbgText">Sin datos de cámara.</div>
+    <div class="row"><button id="btnCopyCal">Copiar datos de calibración</button></div>
   </details>
   <p class="muted">Prototipo de investigación. No es un producto sanitario.</p>
 </div>
@@ -670,7 +671,10 @@ function prepareInput() {
   const VW = video.videoWidth, VH = video.videoHeight;
   if (!settings.zoom || !G.roi || !VW) { G.inRoi = { x: 0, y: 0, w: VW, h: VH, crop: false }; return video; }
   const r = G.roi;
-  G.cvx.drawImage(video, r.x, r.y, r.s, r.s, 0, 0, ROI_SIZE, ROI_SIZE);
+  // El recorte nunca se reduce: si mide más de 512 px (cara muy cerca) se envía a su tamaño, hasta 960 px.
+  const size = Math.min(960, Math.max(ROI_SIZE, r.s));
+  if (G.cv.width !== size) { G.cv.width = G.cv.height = size; }
+  G.cvx.drawImage(video, r.x, r.y, r.s, r.s, 0, 0, size, size);
   G.inRoi = { x: r.x, y: r.y, w: r.s, h: r.s, crop: true };
   return G.cv;
 }
@@ -1028,7 +1032,7 @@ function drawDebug() {
   const f = G.raw;
   lines.push('dirección: ' + (G.dir || '—') + (G.armed ? ' (armado)' : ' (vuelve al centro)') + '   fps ' + G.fps);
   lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms  suavizado ' + settings.smooth + ' %');
-  lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + ROI_SIZE + ' px (×' + (ROI_SIZE / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
+  lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + G.cv.width + ' px (×' + (G.cv.width / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
     (G.eyeBox ? '  · ojos ' + Math.round(G.eyeBox.D) + ' px' : ''));
   lines.push('distancia ' + (G.dist ? G.dist.toFixed(1) + ' cm' : '—') + (G.raw && G.raw.irisPx ? '  · iris ' + G.raw.irisPx.toFixed(1) + ' px' : '') + '  · pantalla ' + (innerWidth * cmPerPx()).toFixed(1) + '×' + (innerHeight * cmPerPx()).toFixed(1) + ' cm');
   lines.push('deriva corregida  x ' + G.bias.x.toFixed(3) + '  y ' + G.bias.y.toFixed(3));
@@ -1136,7 +1140,7 @@ async function runCalib() {
       return;
     }
     const med = {};
-    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL', 'size', 'Dpx', 'ecx', 'ecy', 'irisPx']) med[k] = median(use.map((s) => s[k]));
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'size', 'Dpx', 'ecx', 'ecy', 'irisPx']) med[k] = median(use.map((s) => s[k]));
     pts.push({ pt, med, samples: use });
   }
   // --- Ajuste del modelo: rasgos del ojo → ángulo hacia cada punto (conocido en cm) ---
@@ -1184,7 +1188,14 @@ async function runCalib() {
   const cs0 = pts[0].samples.concat(pts[pts.length - 1].samples);
   const pose = { roll: median(cs0.map((s) => s.roll)), yaw: median(cs0.map((s) => s.yaw)), pitch: median(cs0.map((s) => s.pitch)), size: median(cs0.map((s) => s.size)), orient: screenOrient() };
   const postura = $('cPost').value in POSTURAS ? $('cPost').value : perfiles.activa;
-  calib = { geo: true, ppi: settings.ppi || 160, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
+  const r4 = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v * 1e4) / 1e4 : v);
+  const puntos = pts.map((p) => {
+    const q = pred(p.med), o = { k: p.pt.k, x: p.pt.x, y: p.pt.y, n: p.samples.length, cmX: r4(p.cm.x), cmY: r4(p.cm.y), tx: r4(p.tx), ty: r4(p.ty), predTx: r4(q.tx), predTy: r4(q.ty) };
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'irisPx', 'Dpx', 'ecx', 'ecy']) o[k] = r4(p.med[k]);
+    o.sdEx = r4(std(p.samples.map((s) => s.ex))); o.sdEy = r4(std(p.samples.map((s) => s.ey)));
+    return o;
+  });
+  calib = { geo: true, puntos, ppi: settings.ppi || 160, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
     fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
   G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
@@ -1205,6 +1216,10 @@ async function runCalib() {
   $('cStart').style.display = ''; $('cStart').textContent = 'Repetir';
   $('cCancel').textContent = 'Cerrar';
   $('cApply') && $('cApply').remove();
+  $('cCopy') && $('cCopy').remove();
+  const bc = document.createElement('button'); bc.id = 'cCopy'; bc.textContent = 'Copiar datos';
+  bc.onclick = async () => { const ok = await copyCalibData(); bc.textContent = ok ? 'Copiado ✓' : 'No se pudo copiar'; };
+  $('cCancel').before(bc);
   if (recom !== settings.thr) {
     const b = document.createElement('button'); b.id = 'cApply'; b.textContent = 'Usar umbral ' + recom + ' %';
     b.onclick = () => { settings.thr = recom; lsSet(LS.set, settings); bindSettings(); b.remove(); };
@@ -1254,6 +1269,7 @@ $('cStart').onclick = runCalib;
 $('cCancel').onclick = () => {
   calCancel = true; G.collecting = null; calMode('intro'); $('calib').classList.remove('on');
   const ap = $('cApply'); if (ap) ap.remove();
+  const cc = $('cCopy'); if (cc) cc.remove();
   G.armed = false;
   try { speechSynthesis.cancel(); } catch (e) {}
 };
@@ -1268,14 +1284,50 @@ $('btnSpeak').onclick = () => {
   if (!txt) return;
   if (!speak(txt)) setMsg('Este navegador no permite leer en voz alta.', true);
 };
+async function copyText(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; } catch (e) {
+    try { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e2) { return false; }
+  }
+}
 $('btnCopyStats').onclick = async () => {
   const txt = statsText();
-  let ok = false;
-  try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) {
-    try { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove(); } catch (e2) {}
-  }
+  const ok = await copyText(txt);
   setMsg(ok ? 'Estadísticas copiadas al portapapeles.' : 'No se pudo copiar. Texto:\n' + txt, !ok);
 };
+// Datos técnicos para analizar la calibración en un móvil real: dispositivo, cámara, ajustes,
+// calibraciones guardadas (con los datos de cada punto) y una foto del estado actual del seguimiento.
+function calibDataText() {
+  const r4 = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v * 1e4) / 1e4 : v);
+  const round = (o) => JSON.parse(JSON.stringify(o, (k, v) => r4(v)));
+  let cam = null;
+  try { const tr = G.stream && G.stream.getVideoTracks()[0]; if (tr) { const st = tr.getSettings(); cam = { label: tr.label, width: st.width, height: st.height, frameRate: st.frameRate, zoom: st.zoom, videoW: video.videoWidth, videoH: video.videoHeight }; } } catch (e) {}
+  const f = G.raw;
+  const datos = {
+    tipo: 'eyetype-calibracion', version: 1, fecha: new Date().toISOString(),
+    dispositivo: { ua: navigator.userAgent, pantalla: { w: screen.width, h: screen.height, innerW: innerWidth, innerH: innerHeight, dpr: devicePixelRatio,
+      orientacion: (screen.orientation && screen.orientation.type) || null, angulo: (screen.orientation && screen.orientation.angle) ?? null },
+      ppiMedido: settings.ppi || null, cmPorPx: cmPerPx(), camaraCm: camPos(), focalPx: camF() },
+    camara: cam, ajustes: settings,
+    posturaActiva: perfiles.activa, perfiles: perfiles.lista,
+    ahora: G.on ? {
+      fps: G.fps, zoom: G.inRoi && G.inRoi.crop ? { recorte: G.inRoi.w, factor: G.cv.width / G.inRoi.w } : null,
+      distanciaCm: G.dist, pose: G.pose, distanciaPose: G.poseOff ?? null, deriva: G.bias,
+      mirada: G.sx === null ? null : { x: G.sx, y: G.sy }, direccion: G.dir, ojosCerrados: G.closedNow,
+      rasgos: f ? { ex: f.ex, ey: f.ey, yaw: f.yaw, pitch: f.pitch, roll: f.roll, ear: f.ear, earR: f.earR, earL: f.earL, irisPx: f.irisPx, Dpx: f.Dpx, ecx: f.ecx, ecy: f.ecy } : null,
+      ojoCm: f && G.dist ? eyePosCm(f, G.dist) : null,
+    } : 'cámara apagada',
+  };
+  return JSON.stringify(round(datos));
+}
+async function copyCalibData() {
+  const txt = calibDataText();
+  const ok = await copyText(txt);
+  const kb = (txt.length / 1024).toFixed(1).replace('.', ',');
+  setMsg(ok ? 'Datos de calibración copiados (' + kb + ' KB). Pégalos en el chat.' : 'No se pudo copiar automáticamente. Abre «Depuración» y copia el texto a mano.', !ok);
+  if (!ok) { $('dbgBox').open = true; $('dbgText').textContent = txt; }
+  return ok;
+}
+$('btnCopyCal').onclick = copyCalibData;
 $('btnResetCal').onclick = () => {
   delete perfiles.lista[perfiles.activa]; savePerfiles(); calib = null; G.bias = { x: 0, y: 0 };
   renderPosturas(); setMsg('Calibración de «' + POSTURAS[perfiles.activa] + '» borrada.');
