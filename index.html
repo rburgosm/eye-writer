@@ -1183,7 +1183,31 @@ async function runCalib() {
   // Peor dirección: la que queda más lejos de su punto.
   const dirErr = {};
   for (const p of pts) { const k = p.pt.k.replace('2', ''); if (!['left', 'right', 'up', 'down'].includes(k)) continue; const m = mapW(p.med); dirErr[k] = Math.max(dirErr[k] || 0, Math.hypot(m.x - p.pt.x, m.y - p.pt.y)); }
-  const calidad = err > 0.45 ? 'mala' : (err < 0.2 && ruido < 0.12) ? 'buena' : (err < 0.3 && ruido < 0.2) ? 'aceptable' : 'baja';
+  // --- Calidad según lo que de verdad usa el detector de gestos ---
+  // Temblor tras el mismo filtro que se aplica al escribir (mediana de 5 + media exponencial), no fotograma a fotograma.
+  const filtra = (arr) => {
+    const out = [], buf = []; let sx = null, sy = null; const a = 1 - settings.smooth / 100;
+    for (const p of arr) {
+      buf.push(p); if (buf.length > 5) buf.shift();
+      const mx = median(buf.map((q) => q.x)), my = median(buf.map((q) => q.y));
+      sx = sx === null ? mx : sx + a * (mx - sx); sy = sy === null ? my : sy + a * (my - sy);
+      out.push({ x: sx, y: sy });
+    }
+    return out.slice(5);
+  };
+  const fc = filtra(pts[0].samples.map(mapW)).concat(filtra(pts[pts.length - 1].samples.map(mapW)));
+  const ruidoUso = Math.max(0.01, std(fc.map((p) => p.x)), std(fc.map((p) => p.y)));
+  // Alcance de cada dirección: hasta dónde llega la mirada estimada al mirar ese borde (1 = el borde).
+  const alcance = {};
+  for (const [d, ax, sg] of [['left', 'x', -1], ['right', 'x', 1], ['up', 'y', -1], ['down', 'y', 1]]) {
+    const v = pts.filter((p) => p.pt.k === d || p.pt.k === d + '2').map((p) => sg * mapW(p.med)[ax]);
+    alcance[d] = v.reduce((a, b) => a + b, 0) / v.length;
+  }
+  // Separación: cuántas veces el temblor cabe entre «volver al centro» y el borde más flojo.
+  const retF = settings.ret / 100;
+  const sep = {}; for (const d in alcance) sep[d] = (alcance[d] - retF) / ruidoUso;
+  const minSep = Math.min(...Object.values(sep));
+  const calidad = err > 0.5 || minSep < 2 ? 'mala' : minSep >= 8 ? 'buena' : minSep >= 5 ? 'aceptable' : 'baja';
   const byKey = (k) => pts.find((p) => p.pt.k === k).med;
   const cs0 = pts[0].samples.concat(pts[pts.length - 1].samples);
   const pose = { roll: median(cs0.map((s) => s.roll)), yaw: median(cs0.map((s) => s.yaw)), pitch: median(cs0.map((s) => s.pitch)), size: median(cs0.map((s) => s.size)), orient: screenOrient() };
@@ -1196,19 +1220,25 @@ async function runCalib() {
     return o;
   });
   calib = { geo: true, puntos, ppi: settings.ppi || 160, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
-    fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
+    fecha: new Date().toISOString(), calidad, err, ruido, ruidoUso, alcance, sep, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
   G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
   G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = [];
   G.armed = false;
-  // Umbral recomendado: lejos del ruido pero sin exigir llegar al borde.
-  const recom = Math.round(Math.min(95, Math.max(55, 100 * (0.45 + 3 * ruido + err))) / 5) * 5;
+  // Umbral recomendado: por debajo del alcance de la dirección más floja (con margen de temblor)
+  // y por encima de la zona de «volver al centro».
+  const minAlc = Math.min(...Object.values(alcance));
+  const recom = Math.floor(Math.min(95, Math.max(settings.ret + 10, 100 * (minAlc - 2.5 * ruidoUso))) / 5) * 5;
   const nombres = { left: 'izquierda', right: 'derecha', up: 'arriba', down: 'abajo' };
   const peor = Object.entries(dirErr).sort((a, b) => b[1] - a[1])[0];
   const f1 = (v) => v.toFixed(1).replace('.', ',');
-  let sub = 'Calidad ' + calidad + ' · a ' + Math.round(d0) + ' cm la pantalla abarca ' + Math.round(spanX) + '° × ' + Math.round(spanY) + '° · error medio ' + f1(errDeg) + '° (' + Math.round(err * 100) + ' %) · temblor ±' +
-    f1(ruidoDeg) + '° · deriva ' + Math.round(deriva * 100) + ' %. ';
-  if (calidad === 'mala' || calidad === 'baja') sub += 'La dirección más floja es «' + nombres[peor[0]] + '». Repite con más luz y sin mover la cabeza. ';
+  const sym = { left: '←', right: '→', up: '↑', down: '↓' };
+  const nota = (v) => (v >= 8 ? 'bien' : v >= 5 ? 'justa' : v >= 2 ? 'floja' : 'falla');
+  const porDir = ['left', 'right', 'up', 'down'].map((d) => sym[d] + ' ' + nota(sep[d])).join(' · ');
+  let sub = 'Calidad ' + calidad + ': ' + porDir + '. A ' + Math.round(d0) + ' cm la pantalla abarca ' + Math.round(spanX) + '° × ' + Math.round(spanY) + '°; error medio ' + f1(errDeg) + '° (' + Math.round(err * 100) + ' %); temblor ±' +
+    Math.round(ruidoUso * 100) + ' % suavizado (±' + f1(ruidoDeg) + '° sin suavizar). ';
+  const floja = ['left', 'right', 'up', 'down'].filter((d) => sep[d] < 5).map((d) => nombres[d]);
+  if (floja.length) sub += 'Flojas: ' + floja.join(', ') + '. Más luz de frente, sin reflejos y la cabeza quieta; o sube el suavizado en Ajustes. ';
   sub += 'Umbral recomendado: ' + recom + ' % (ahora ' + settings.thr + ' %). Prueba: el círculo rojo sigue tu mirada; mira cada borde y se iluminará.';
   calMode('test');
   calShow('✓', 'Guardada: ' + POSTURAS[postura], sub, 1);
