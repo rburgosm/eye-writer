@@ -682,12 +682,12 @@ function updateRoi(toV) {
   const s = Math.round(Math.max(160, Math.min(2.8 * D, VW, VH)));   // la cara entera debe caber para que MediaPipe no la pierda
   // Centro del recorte un poco hacia la barbilla, siguiendo la orientación de la cara (no la de la imagen).
   const cx = cx0 - 0.3 * D * Math.sin(roll), cy = cy0 + 0.3 * D * Math.cos(roll);
+  // Se compara con el recorte ya ajustado a los bordes de la imagen: si la cara está pegada a un borde
+  // (habitual, porque la cámara está encima de la pantalla) el recorte no se puede centrar y no debe recalcularse en cada fotograma.
+  const nx = Math.round(Math.min(Math.max(cx - s / 2, 0), VW - s)), ny = Math.round(Math.min(Math.max(cy - s / 2, 0), VH - s));
   const r = G.roi;
-  if (r) {
-    const dc = Math.hypot(cx - (r.x + r.s / 2), cy - (r.y + r.s / 2));
-    if (dc < 0.1 * r.s && Math.abs(s / r.s - 1) < 0.15) return;
-  }
-  G.roi = { x: Math.round(Math.min(Math.max(cx - s / 2, 0), VW - s)), y: Math.round(Math.min(Math.max(cy - s / 2, 0), VH - s)), s };
+  if (r && Math.hypot(nx - r.x, ny - r.y) < 0.1 * r.s && Math.abs(s / r.s - 1) < 0.15) return;
+  G.roi = { x: nx, y: ny, s };
   G.roiSkip = 2;   // los primeros fotogramas tras mover el recorte pueden traer saltos
 }
 // Vista ampliada de los ojos (para comprobar que se detectan bien).
@@ -708,6 +708,12 @@ function drawEyes(cv) {
     x.beginPath(); x.arc(p.x, p.y, (p.i >= 468 ? 4 : 2) / k, 0, 7); x.fill();
   }
   x.restore();
+  if (G.dist) {
+    const d = Math.round(G.dist), txt = 'a ' + d + ' cm' + (d < 22 ? ' · aléjate un poco' : d > 55 ? ' · acércate un poco' : '');
+    x.font = '600 14px sans-serif'; const tw = x.measureText(txt).width;
+    x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(6, H - 26, tw + 12, 20);
+    x.fillStyle = d < 22 || d > 55 ? '#fbbf24' : '#fff'; x.fillText(txt, 12, H - 11);
+  }
 }
 
 // Índices de Face Mesh (con refineLandmarks): iris 468 (ojo derecho de la persona) y 473 (izquierdo).
@@ -730,7 +736,7 @@ function features(lm, W, H) {
   const u = { x: (o2.x - o1.x) / uL, y: (o2.y - o1.y) / uL }, v = { x: -u.y, y: u.x };
   const c1 = P(234), c2 = P(454), f = P(10), ch = P(152);
   const yaw = Math.atan2(c2.z - c1.z, (c2.x - c1.x) * u.x + (c2.y - c1.y) * u.y);   // positivo: la cara gira hacia la derecha de la imagen
-  const pitch = Math.atan2(ch.z - f.z, (ch.x - f.x) * v.x + (ch.y - f.y) * v.y);    // positivo: barbilla hacia la cámara
+  const pitch = Math.atan2(ch.z - f.z, (ch.x - f.x) * v.x + (ch.y - f.y) * v.y);    // signo coherente con «ey» (el ajuste aprende el sentido)
   const roll = Math.atan2(u.y, u.x);
   return { ex: 2.5 * ((r.h + l.h) / 2 - 0.5), ey: 2.5 * (r.v + l.v) / 2, yaw, pitch, roll, earR: r.ear, earL: l.ear, ear: (r.ear + l.ear) / 2 };
 }
@@ -743,11 +749,60 @@ function featVec(f, head, ear0) {
   const g = gazeOf(f, head);
   return [1, g.x, g.y, (f.ear - ear0) / (ear0 || 1)];
 }
+/* ---- Geometría real: pantalla en cm, posición de la cámara, distancia y posición del ojo ---- */
+// En Chrome para Android 1 px CSS ≈ 1 dp = 1/160 pulgada. El iris humano mide ~11,7 mm en casi todo el mundo,
+// así que su tamaño en la imagen da la distancia ojo-cámara. El campo de visión de las cámaras frontales ronda 80° en diagonal.
+const CM_PER_PX = 2.54 / 160, IRIS_CM = 1.17, CAM_DIAG_FOV = 80 * Math.PI / 180;
+function camF() { return Math.hypot(video.videoWidth || 640, video.videoHeight || 480) / 2 / Math.tan(CAM_DIAG_FOV / 2); }
+// Posición de la cámara respecto al centro de la pantalla (cm, x a la derecha, y hacia abajo).
+function camPos() {
+  const W = innerWidth * CM_PER_PX, H = innerHeight * CM_PER_PX;
+  let ang = screen.orientation && typeof screen.orientation.angle === 'number' ? screen.orientation.angle : (typeof window.orientation === 'number' ? window.orientation : 0);
+  ang = ((ang % 360) + 360) % 360;
+  // Entre el borde de la página y la cámara están la barra de estado y la del navegador: se estima con lo que ocupa
+  // la pantalla y no la página (aprox. 70 % de esa diferencia queda del lado de la cámara).
+  const sw = screen.width || innerWidth, sh = screen.height || innerHeight;
+  const extra = (ang === 90 || ang === 270) ? Math.max(sw, sh) - innerWidth : Math.max(sw, sh) - innerHeight;
+  const off = Math.min(2.5, Math.max(0.6, 0.4 + 0.7 * Math.max(0, extra) * CM_PER_PX));
+  if (ang === 90) return { x: -W / 2 - off, y: 0 };     // horizontal girado a la izquierda: la cámara queda a la izquierda
+  if (ang === 270) return { x: W / 2 + off, y: 0 };
+  if (ang === 180) return { x: 0, y: H / 2 + off };     // boca abajo: cámara abajo
+  return { x: 0, y: -H / 2 - off };                       // vertical: cámara arriba
+}
+function normToCm(x, y) { const p = screenPos(x, y); return { x: (p.left - innerWidth / 2) * CM_PER_PX, y: (p.top - innerHeight / 2) * CM_PER_PX }; }
+function cmToNorm(c) {
+  const W = innerWidth, H = innerHeight;
+  return { x: (c.x / CM_PER_PX + W / 2 - CAL_MARGIN) / (W - 2 * CAL_MARGIN) * 2 - 1, y: (c.y / CM_PER_PX + H / 2 - CAL_MARGIN) / (H - 2 * CAL_MARGIN) * 2 - 1 };
+}
+// Posición del ojo (punto medio entre los dos) proyectada sobre el plano de la pantalla, en cm.
+// La imagen de la cámara frontal no está espejada: lo que está a tu derecha sale a la izquierda de la imagen.
+function eyePosCm(f, d) {
+  const C = camPos(), F = camF(), VW = video.videoWidth || 640, VH = video.videoHeight || 480;
+  return { x: C.x - (f.ecx - VW / 2) / F * d, y: C.y + (f.ecy - VH / 2) / F * d };
+}
+// Distancia ojo-pantalla (cm): con calibración, a partir de la separación de los ojos (más estable); si no, del iris.
+function distOf(f) {
+  if (calib && calib.kdF && f.Dpx) return calib.kdF * camF() / f.Dpx;
+  return f.irisPx > 2 ? camF() * IRIS_CM / f.irisPx : null;
+}
+// Modelo: rasgos del ojo → tangente del ángulo de mirada (horizontal y vertical) respecto al ojo.
+// Punto mirado = ojo + tangente × distancia. Así, si acercas o alejas el móvil o mueves la cabeza, el punto sigue bien.
+function gazePointCm(f, model, d, E) {
+  const v = featVec(f, model.head, model.center.ear);
+  const tx = model.wx.reduce((a, w, i) => a + w * v[i], 0), ty = model.wy.reduce((a, w, i) => a + w * v[i], 0);
+  return { x: E.x + tx * d, y: E.y + ty * d, tx, ty };
+}
 // Mirada en coordenadas de pantalla: -1 = borde izquierdo/superior, +1 = borde derecho/inferior.
 function mapRaw(f) {
-  const v = featVec(f, calib.head, calib.center.ear);
-  const dot = (w) => w.reduce((a, wi, i) => a + wi * v[i], 0);
-  return { x: dot(calib.wx) - G.bias.x, y: dot(calib.wy) - G.bias.y };
+  if (!calib.geo) {     // calibraciones antiguas (sin geometría)
+    const v = featVec(f, calib.head, calib.center.ear);
+    const dot = (w) => w.reduce((a, wi, i) => a + wi * v[i], 0);
+    return { x: dot(calib.wx) - G.bias.x, y: dot(calib.wy) - G.bias.y };
+  }
+  const d = G.dist || calib.d0;
+  const E = calib.head ? eyePosCm(f, d) : calib.E0;
+  const n = cmToNorm(gazePointCm(f, calib, d, E));
+  return { x: n.x - G.bias.x, y: n.y - G.bias.y };
 }
 function closedThreshold() {
   const base = calib ? calib.center.ear : 0.28;
@@ -779,7 +834,7 @@ function setPostura(k, origen) {
   if (!POSTURAS[k]) return;
   perfiles.activa = k; savePerfiles();
   calib = perfiles.lista[k] || null;
-  G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = []; G.armed = false; G.dir = null; G.autoCount = 0;
+  G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = []; G.armed = false; G.dir = null; G.autoCount = 0; G.dist = null;
   setDwellProgress(null, 0);
   renderPosturas();
   if (origen === 'auto') {
@@ -828,11 +883,20 @@ function onResults(res) {
   }
   G.lostCount = 0;
   G.lastFace = t;
-  updateRoi((i) => ({ x: R.x + lm[i].x * R.w, y: R.y + lm[i].y * R.h }));
+  const toV = (i) => ({ x: R.x + lm[i].x * R.w, y: R.y + lm[i].y * R.h });
+  updateRoi(toV);
   if (calibOpen()) drawEyes($('cEyes'));
   const W = res.image.width || R.w, H = res.image.height || R.h;
   const f = features(lm, W, H);
   f.size = G.eyeBox ? G.eyeBox.D / Math.max(video.videoWidth || 640, video.videoHeight || 480) : 0.1;
+  const dv = (a, b) => { const p = toV(a), q = toV(b); return Math.hypot(p.x - q.x, p.y - q.y); };
+  f.irisPx = (dv(469, 471) + dv(474, 476)) / 2;          // diámetro del iris en píxeles de vídeo
+  if (!G.eyeBox) { drawDebug(); return; }
+  // Separación de los ojos corregida por el giro de la cabeza (girada, la cara se ve más estrecha y parecería más lejos).
+  f.Dpx = G.eyeBox.D / Math.max(0.5, Math.cos(f.yaw)); f.ecx = G.eyeBox.cx; f.ecy = G.eyeBox.cy;
+  f.dIris = f.irisPx > 2 ? camF() * IRIS_CM / f.irisPx : null;
+  const dNow = distOf(f);
+  if (dNow && isFinite(dNow)) G.dist = G.dist ? G.dist + 0.1 * (dNow - G.dist) : dNow;
   G.raw = f;
   trackPose(f, t);
   // --- ojos cerrados (ambos) ---
@@ -947,6 +1011,7 @@ function drawDebug() {
   lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms  suavizado ' + settings.smooth + ' %');
   lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + ROI_SIZE + ' px (×' + (ROI_SIZE / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
     (G.eyeBox ? '  · ojos ' + Math.round(G.eyeBox.D) + ' px' : ''));
+  lines.push('distancia ' + (G.dist ? G.dist.toFixed(1) + ' cm' : '—') + (G.raw && G.raw.irisPx ? '  · iris ' + G.raw.irisPx.toFixed(1) + ' px' : '') + '  · pantalla ' + (innerWidth * CM_PER_PX).toFixed(1) + '×' + (innerHeight * CM_PER_PX).toFixed(1) + ' cm');
   lines.push('deriva corregida  x ' + G.bias.x.toFixed(3) + '  y ' + G.bias.y.toFixed(3));
   if (f) {
     lines.push('ojo x ' + f.ex.toFixed(3) + '  y ' + f.ey.toFixed(3) + '  · cabeza yaw ' + (f.yaw * 57.3).toFixed(1) + '°  pitch ' + (f.pitch * 57.3).toFixed(1) + '°');
@@ -954,21 +1019,22 @@ function drawDebug() {
   }
   if (G.pose) lines.push('pose  inclinación ' + (G.pose.roll * 57.3).toFixed(0) + '°  giro ' + (G.pose.yaw * 57.3).toFixed(0) + '°  cabeceo ' + (G.pose.pitch * 57.3).toFixed(0) + '°  tamaño ' + G.pose.size.toFixed(3) +
     '  pantalla ' + G.pose.orient + (G.poseOff !== null && G.poseOff !== undefined ? '  · distancia a la calibración ' + G.poseOff.toFixed(2) : ''));
-  if (calib) lines.push('postura ' + POSTURAS[perfiles.activa] + ' · calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad + '  error ' + Math.round(calib.err * 100) + ' %  ruido ±' + Math.round(calib.ruido * 100) + ' %');
+  if (calib) lines.push('postura ' + POSTURAS[perfiles.activa] + ' · calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad + '  error ' + Math.round(calib.err * 100) + ' %' + (calib.geo ? ' (' + calib.errDeg.toFixed(1) + '°)' : '') + '  ruido ±' + Math.round(calib.ruido * 100) + ' %');
   else lines.push('sin calibración');
   $('dbgText').textContent = lines.join('\n');
 }
 
 /* ============================ Calibración ============================ */
-// Puntos en pantalla: centro, bordes, esquinas y de nuevo el centro (para medir la deriva).
+// Puntos en pantalla con posición conocida en cm: centro, bordes, esquinas, puntos intermedios, bordes otra vez y centro (para medir la deriva).
 // Los movimientos son cortos: basta con mirar el borde del móvil.
 const CAL_POINTS = [
   { k: 'center', x: 0, y: 0 }, { k: 'left', x: -1, y: 0 }, { k: 'right', x: 1, y: 0 }, { k: 'up', x: 0, y: -1 }, { k: 'down', x: 0, y: 1 },
   { k: 'ul', x: -1, y: -1 }, { k: 'dr', x: 1, y: 1 }, { k: 'ur', x: 1, y: -1 }, { k: 'dl', x: -1, y: 1 },
+  { k: 'hl', x: -0.5, y: 0 }, { k: 'hu', x: 0, y: -0.5 }, { k: 'hr', x: 0.5, y: 0 }, { k: 'hd', x: 0, y: 0.5 },
   { k: 'left2', x: -1, y: 0 }, { k: 'up2', x: 0, y: -1 }, { k: 'right2', x: 1, y: 0 }, { k: 'down2', x: 0, y: 1 },
   { k: 'center2', x: 0, y: 0 },
 ];
-const CAL_SETTLE = 900, CAL_COLLECT = 1300, CAL_MARGIN = 16;
+const CAL_SETTLE = 900, CAL_COLLECT = 1200, CAL_MARGIN = 16;
 let calCancel = false;
 function calShow(arrow, title, sub, p) {
   $('cArrow').textContent = arrow; $('cTitle').textContent = title; $('cSub').textContent = sub; $('cBar').style.width = Math.round((p || 0) * 100) + '%';
@@ -1011,8 +1077,8 @@ function openCalib() {
   $('calib').classList.add('on');
   $('cStart').style.display = ''; $('cStart').textContent = 'Empezar'; $('cCancel').textContent = 'Cancelar';
   calShow('👁', 'Calibración fina', 'Ponte en la postura en la que vas a escribir y elígela arriba: se guarda una calibración por postura. ' +
-    'Comprueba que se ven tus ojos con el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~30 s): ' +
-    'síguelo solo con los ojos, sin mover la cabeza, hasta que el círculo se cierre. Tumbado de lado: bloquea el giro de pantalla.', 0);
+    'Comprueba que se ven tus ojos con el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~40 s): ' +
+    'fija la vista en el puntito central, solo con los ojos y sin mover la cabeza, hasta que el círculo se cierre. Con la distancia (abajo a la izquierda) y la posición de cada punto se calcula el ángulo real de tu mirada. Tumbado de lado: bloquea el giro de pantalla.', 0);
   renderPosturas();
   if (!G.on) startCamera();
 }
@@ -1050,25 +1116,46 @@ async function runCalib() {
       return;
     }
     const med = {};
-    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL', 'size']) med[k] = median(use.map((s) => s[k]));
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL', 'size', 'Dpx', 'ecx', 'ecy', 'irisPx']) med[k] = median(use.map((s) => s[k]));
     pts.push({ pt, med, samples: use });
   }
-  // --- Ajuste del modelo (rasgos → pantalla) ---
+  // --- Ajuste del modelo: rasgos del ojo → ángulo hacia cada punto (conocido en cm) ---
   const center = pts[0].med;
   const ear0 = center.ear;
+  const all = pts.reduce((a, p) => a.concat(p.samples), []);
+  const irisMed = median(all.map((s) => s.irisPx).filter((v) => v > 2));
+  const d0 = irisMed ? camF() * IRIS_CM / irisMed : 35;          // distancia en la calibración (cm)
+  const kd = d0 * median(all.map((s) => s.Dpx));                   // distancia = kd / separación de los ojos en píxeles
+  const kdF = kd / camF();                                         // sin depender de la resolución de la cámara
+  const dOf = (f) => kd / f.Dpx;
+  const Eof = (f) => (head ? eyePosCm(f, dOf(f)) : eyePosCm(center, d0));
+  for (const p of pts) {
+    const P = normToCm(p.pt.x, p.pt.y), d = dOf(p.med), E = Eof(p.med);
+    p.cm = P; p.tx = (P.x - E.x) / d; p.ty = (P.y - E.y) / d;
+  }
   const rows = pts.map((p) => featVec(p.med, head, ear0));
   const lam = 0.3;
-  const wx = fitLinear(rows, pts.map((p) => p.pt.x), lam);
-  const wy = fitLinear(rows, pts.map((p) => p.pt.y), lam);
-  const mapW = (f) => { const v = featVec(f, head, ear0); return { x: wx.reduce((a, w, i) => a + w * v[i], 0), y: wy.reduce((a, w, i) => a + w * v[i], 0) }; };
-  // Error medio en cada punto (en fracción de media pantalla) y ruido en reposo.
+  const model = { head, center, wx: fitLinear(rows, pts.map((p) => p.tx), lam), wy: fitLinear(rows, pts.map((p) => p.ty), lam) };
+  const wx = model.wx, wy = model.wy;
+  const pred = (f) => gazePointCm(f, model, dOf(f), Eof(f));
+  const mapW = (f) => cmToNorm(pred(f));
+  const deg = (t) => Math.atan(t) * 180 / Math.PI;
+  // Error medio en cada punto: en grados y en fracción de media pantalla. Temblor en reposo (centro).
+  const errsDeg = pts.map((p) => { const q = pred(p.med); return Math.hypot(deg(q.tx) - deg(p.tx), deg(q.ty) - deg(p.ty)); });
+  const errDeg = errsDeg.reduce((a, b) => a + b, 0) / errsDeg.length;
   const errs = pts.map((p) => { const m = mapW(p.med); return Math.hypot(m.x - p.pt.x, m.y - p.pt.y); });
   const err = errs.reduce((a, b) => a + b, 0) / errs.length;
-  const cs = pts[0].samples.concat(pts[pts.length - 1].samples).map(mapW);
+  const csS = pts[0].samples.concat(pts[pts.length - 1].samples);
+  const cs = csS.map(mapW);
   const sdx = std(cs.map((p) => p.x)), sdy = std(cs.map((p) => p.y));
   const ruido = Math.max(sdx, sdy);
+  const cq = csS.map(pred);
+  const ruidoDeg = Math.max(std(cq.map((q) => deg(q.tx))), std(cq.map((q) => deg(q.ty))));
   const c1 = mapW(pts[0].med), c2 = mapW(pts[pts.length - 1].med);
   const deriva = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+  // Ángulo que abarca la pantalla desde el ojo (para saber cuánto hay que mover los ojos).
+  const spanX = deg(pts.find((p) => p.pt.k === 'right').tx) - deg(pts.find((p) => p.pt.k === 'left').tx);
+  const spanY = deg(pts.find((p) => p.pt.k === 'down').ty) - deg(pts.find((p) => p.pt.k === 'up').ty);
   // Peor dirección: la que queda más lejos de su punto.
   const dirErr = {};
   for (const p of pts) { const k = p.pt.k.replace('2', ''); if (!['left', 'right', 'up', 'down'].includes(k)) continue; const m = mapW(p.med); dirErr[k] = Math.max(dirErr[k] || 0, Math.hypot(m.x - p.pt.x, m.y - p.pt.y)); }
@@ -1077,7 +1164,9 @@ async function runCalib() {
   const cs0 = pts[0].samples.concat(pts[pts.length - 1].samples);
   const pose = { roll: median(cs0.map((s) => s.roll)), yaw: median(cs0.map((s) => s.yaw)), pitch: median(cs0.map((s) => s.pitch)), size: median(cs0.map((s) => s.size)), orient: screenOrient() };
   const postura = $('cPost').value in POSTURAS ? $('cPost').value : perfiles.activa;
-  calib = { wx, wy, head, center, down: byKey('down'), pose, postura, fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr };
+  calib = { geo: true, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
+    fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
+  G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
   G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = [];
   G.armed = false;
@@ -1085,7 +1174,9 @@ async function runCalib() {
   const recom = Math.round(Math.min(95, Math.max(55, 100 * (0.45 + 3 * ruido + err))) / 5) * 5;
   const nombres = { left: 'izquierda', right: 'derecha', up: 'arriba', down: 'abajo' };
   const peor = Object.entries(dirErr).sort((a, b) => b[1] - a[1])[0];
-  let sub = 'Calidad ' + calidad + ' · error medio ' + Math.round(err * 100) + ' % · temblor ±' + Math.round(ruido * 100) + ' % · deriva ' + Math.round(deriva * 100) + ' %. ';
+  const f1 = (v) => v.toFixed(1).replace('.', ',');
+  let sub = 'Calidad ' + calidad + ' · a ' + Math.round(d0) + ' cm la pantalla abarca ' + Math.round(spanX) + '° × ' + Math.round(spanY) + '° · error medio ' + f1(errDeg) + '° (' + Math.round(err * 100) + ' %) · temblor ±' +
+    f1(ruidoDeg) + '° · deriva ' + Math.round(deriva * 100) + ' %. ';
   if (calidad === 'mala' || calidad === 'baja') sub += 'La dirección más floja es «' + nombres[peor[0]] + '». Repite con más luz y sin mover la cabeza. ';
   sub += 'Umbral recomendado: ' + recom + ' % (ahora ' + settings.thr + ' %). Prueba: el círculo rojo sigue tu mirada; mira cada borde y se iluminará.';
   calMode('test');

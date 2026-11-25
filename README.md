@@ -36,7 +36,9 @@ La primera vez necesita red para descargar MediaPipe (cdn.jsdelivr.net, ~10 MB);
 ## Calibrar y practicar
 
 1. **Aprende el método sin cámara**: usa los botones o, con teclado, las flechas, Intro (aceptar) y Retroceso (borrar). Prueba «Copiar frase»: la pista muestra los gestos de cada palabra.
-2. **Activar cámara → Calibrar**. Apoya el móvil o sujétalo firme a 30–40 cm, con buena luz de frente. Arriba se ven tus ojos ampliados con el iris marcado: comprueba que los puntos caen bien. Después un punto recorre 14 posiciones (centro, bordes, esquinas, bordes otra vez y centro): síguelo **solo con los ojos**, sin salir de la pantalla. Se ajusta un modelo (iris + giro de cabeza + apertura de párpados → posición en pantalla) y se mide el error, el temblor y la deriva. Al terminar, un círculo rojo sigue tu mirada para probarla y se propone un umbral. Recalibra si cambias de postura o de luz.
+2. **Activar cámara → Calibrar**. Ponte en la postura real y elígela en el selector. Comprueba que se ven tus ojos ampliados con el iris marcado y la distancia estimada (lo ideal: 25–50 cm). Después un punto recorre 18 posiciones conocidas de la pantalla (centro, bordes, esquinas, puntos intermedios, bordes otra vez y centro): fija la vista en su puntito central **solo con los ojos**.
+
+   **Calibración geométrica.** Cada punto se pasa a centímetros (1 px CSS ≈ 1/160 pulgada en Android) y se calcula el ángulo real desde tu ojo hasta él: la distancia sale del tamaño del iris (≈ 11,7 mm en casi todas las personas) y la posición del ojo, de dónde aparece la cara en la imagen respecto a la cámara (encima de la pantalla en vertical). El modelo aprende iris + cabeza + párpados → ángulo de mirada, y en uso se calcula el punto como ojo + ángulo × distancia. Así, si acercas o alejas el móvil o mueves la cabeza, el punto sigue en su sitio. Con una cara simulada el error se mantuvo en 2–3 % de la pantalla a 25, 35 y 45 cm y con la cabeza desplazada 3 cm; sin la parte geométrica subía a 18–29 % al cambiar la distancia y a más del 100 % al mover la cabeza. Al terminar muestra el ángulo que abarca la pantalla, el error en grados, el temblor y la deriva, propone un umbral y deja probarlo con un círculo que sigue la mirada.
 3. Ajustes: umbral (75 % del camino al borde), permanencia (500 ms), suavizado (60 %), corrección lenta de deriva, zoom a los ojos y compensación del giro de cabeza (se aplica al recalibrar).
 4. «Pausa» detiene la detección (para descansar con los ojos cerrados sin borrar).
 5. El panel **Depuración** muestra la cámara, el punto de mirada estimado, la dirección detectada y los umbrales.
@@ -54,6 +56,8 @@ Referencia: con estos grupos, las frases de prueba necesitan de media ~6,2 gesto
 - La mirada vertical (sobre todo abajo) es la más débil; por eso el modelo usa también la apertura de los párpados.
 - Con movimientos cortos, mirar el texto de arriba de la pantalla puede acercarse al umbral de «arriba»: la permanencia (500 ms) y el umbral lo evitan; súbelos si hay gestos falsos.
 - Solo se ha probado con una cara simulada; el zoom y la calibración fina están sin validar con una cámara real.
+- La geometría supone un campo de visión de cámara de ~80° en diagonal y 160 px CSS por pulgada; si un móvil se aleja mucho de eso, la compensación de distancia y de cabeza pierde precisión (la calibración en sí sigue funcionando).
+- Los ángulos del ojo se miden respecto a la línea cámara-ojo y no a la perpendicular de la pantalla: con desplazamientos laterales grandes de la cabeza queda un error residual. Recalibrar lo elimina.
 - Sensible a la luz, a las gafas con reflejos y a mover el móvil: recalibra a menudo.
 - Solo escribe palabras del diccionario (15 000), en minúsculas y sin signos de puntuación.
 - Consume batería; no hay modo en segundo plano.
