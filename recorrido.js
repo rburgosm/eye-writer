@@ -11,7 +11,7 @@
  * Método por defecto ('hmm'): alineamiento tipo HMM izquierda-derecha / DTW entre la
  * secuencia de muestras y la plantilla de la palabra (centros de zona), con
  *   - estados de FIJACIÓN por letra (coste gaussiano a centro de zona, con tope para
- *     outliers y una permanencia mínima de K muestras),
+ *     outliers y una permanencia mínima de 2 muestras/intervalos),
  *   - estados de TRÁNSITO entre letras (coste = distancia al segmento + penalización,
  *     absorbe muestras de sacada que cruzan zonas intermedias),
  *   - "basura" al principio y al final (miradas previas al inicio, cola del parpadeo),
@@ -29,7 +29,7 @@
 
   function sinTildes(w) {
     return w.toLowerCase().replace(/ñ/g, '\u0001').normalize('NFD')
-      .replace(/[̀-ͯ]/g, '').replace(/\u0001/g, 'ñ');
+      .replace(/[\u0300-\u036f]/g, '').replace(/\u0001/g, 'ñ');
   }
 
   // Distribuciones de letras probadas (ver test). La elegida es DISPOSICION_DEFECTO.
@@ -38,9 +38,11 @@
     '2x4': { filas: 2, columnas: 4, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qrs', 'tuvwxyz'] },
     '3x3': { filas: 3, columnas: 3, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qrs', 't', 'uvwxyz'] },
     '2x5': { filas: 2, columnas: 5, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qr', 's', 't', 'uvwxyz'] },
-    '3x4': { filas: 3, columnas: 4, grupos: ['a', 'bcd', 'efg', 'hij', 'kl', 'm', 'nñ', 'op', 'qr', 's', 't', 'uvwxyz'] }
+    '3x4': { filas: 3, columnas: 4, grupos: ['a', 'bcd', 'efg', 'hij', 'kl', 'm', 'nñ', 'op', 'qr', 's', 't', 'uvwxyz'] },
+    '3x5': { filas: 3, columnas: 5, grupos: ['a', 'bc', 'd', 'e', 'f', 'gh', 'i', 'jk', 'l', 'mnñ', 'op', 'qr', 's', 't', 'uvwxyz'] },
+    '4x4': { filas: 4, columnas: 4, grupos: ['a', 'b', 'c', 'd', 'ef', 'gh', 'ij', 'kl', 'm', 'nñ', 'o', 'p', 'qr', 's', 'tu', 'vwxyz'] }
   };
-  var DISPOSICION_DEFECTO = '3x3';
+  var DISPOSICION_DEFECTO = '3x4';
 
   function zonasDeDisposicion(d) {
     var z = [];
@@ -84,9 +86,8 @@
       s: opc.s || 0.22,           // escala de dispersión (ruido + posición dentro de zona)
       tope: opc.tope || 4.5,      // coste máximo por muestra (outliers)
       basura: opc.basura || 2.2,  // coste por muestra antes del inicio / tras el final
-      penTransito: opc.penTransito != null ? opc.penTransito : 1.2,
-      K: opc.K || 2,              // permanencia mínima (muestras) en cada fijación
-      lambda: opc.lambda != null ? opc.lambda : 1.4, // peso del prior de frecuencia
+      penTransito: opc.penTransito != null ? opc.penTransito : 1.5,
+      lambda: opc.lambda != null ? opc.lambda : 1.25, // peso del prior de frecuencia
       haz: opc.haz || 8,
       bin: opc.bin != null ? opc.bin : 70, // ms por intervalo (0 = sin agrupar)
       metodo: opc.metodo || 'hmm'
@@ -147,7 +148,6 @@
     var profMax = 0;
     clases.forEach(function (c) { if (c.seq.length > profMax) profMax = c.seq.length; });
 
-    var PASADA1 = opc.pasada1 || 1000;
     var estadisticas = { nodos: 0, muestras: 0 };
     function priorDe(r) { return P.lambda * Math.log(r + 1); }
 
@@ -205,180 +205,191 @@
     function num(a, b) { return a - b; }
 
     // --- Método HMM / DTW sobre trie ---
-    function decodificarHMM(pts, nRes) {
-      var N = pts.n, X = pts.x, Y = pts.y;
-      var inv = 1 / (2 * P.s * P.s), tope = P.tope, g = P.basura, K = P.K;
-      // Coste de fijación por zona y muestra
-      var cF = new Array(Z);
-      for (var zz = 0; zz < Z; zz++) {
-        var a = new Float64Array(N);
-        for (var t = 0; t < N; t++) {
-          var dx = X[t] - ZX[zz], dy = Y[t] - ZY[zz];
+    // Estado de la decodificación en curso (variables del cierre de crear() para que
+    // las funciones calientes se compilen una vez y no se recreen en cada llamada).
+    var INF = Infinity;
+    var N = 0, cap = 0, cF = [], cT = [], buf = [], pre = null;
+    var res = [], umbral = INF, nRes = 5, llamadas = 0;
+    var inv = 0, tope = 0, g = 0, pen = 0, lambda = 0, haz = 0;
+
+    function reservar(n) {
+      if (n <= cap) return;
+      cap = Math.max(n, 2 * cap, 64);
+      cF = []; for (var z = 0; z < Z; z++) cF.push(new Float64Array(cap));
+      buf = [];
+      for (var d = 0; d <= profMax; d++) {
+        var nivel = [];
+        for (var k = 0; k < Z; k++) nivel.push({ L: new Float64Array(cap), lo: 0, hi: 0, fin: 0, cota: 0, nodo: null });
+        buf.push(nivel);
+      }
+      pre = new Float64Array(cap);
+    }
+
+    function costeTransito(z1, z2) {
+      var idx = z1 * Z + z2;
+      if (cT[idx]) return cT[idx];
+      var X = ptsX, Y = ptsY, a = new Float64Array(N);
+      var ax = ZX[z1], ay = ZY[z1], bx = ZX[z2] - ax, by = ZY[z2] - ay, L = bx * bx + by * by;
+      for (var t = 0; t < N; t++) {
+        var px = X[t] - ax, py = Y[t] - ay, u = (px * bx + py * by) / L;
+        if (u < 0) u = 0; else if (u > 1) u = 1;
+        var dx = px - u * bx, dy = py - u * by;
+        var c = (dx * dx + dy * dy) * inv;
+        a[t] = (c < tope ? c : tope) + pen;
+      }
+      cT[idx] = a;
+      return a;
+    }
+    // Cota inferior del coste por muestra usando sólo las zonas de la máscara (o un
+    // tránsito / basura), acumulada como suma de sufijo: permite podar celdas cuyo coste
+    // más lo que falta ya supera el umbral. Se guardan en un único bloque reutilizable.
+    var sufIdx = new Int32Array(1 << Z), sufPool = new Float64Array(0), sufUsados = 0, sufVista = null;
+    var lbTmp = new Float64Array(0);
+    function sufDe(mascara) {
+      var off = sufIdx[mascara];
+      if (off > 0) return off - 1;
+      var W = N + 1;
+      if ((sufUsados + 1) * W > sufPool.length) {
+        var nuevo = new Float64Array(Math.max(2 * sufPool.length, 64 * W));
+        nuevo.set(sufPool);
+        sufPool = nuevo;
+      }
+      off = sufUsados * W; sufUsados++;
+      var base = g < pen ? g : pen, t, z;
+      for (t = 0; t < N; t++) lbTmp[t] = base;
+      for (z = 0; z < Z; z++) {
+        if (!((mascara >> z) & 1)) continue;
+        var c = cF[z];
+        for (t = 0; t < N; t++) if (c[t] < lbTmp[t]) lbTmp[t] = c[t];
+      }
+      sufPool[off + N] = 0;
+      for (t = N - 1; t >= 0; t--) sufPool[off + t] = sufPool[off + t + 1] + lbTmp[t];
+      sufIdx[mascara] = off + 1;
+      return off;
+    }
+
+    function insertar(w, c) {
+      for (var j = 0; j < res.length; j++) if (res[j].w === w) return;
+      var i = res.length;
+      res.push(null);
+      while (i > 0 && res[i - 1].c > c) { res[i] = res[i - 1]; i--; }
+      res[i] = { w: w, c: c };
+      if (res.length > nRes) res.length = nRes;
+      // Umbral de poda: el n-ésimo mejor, y nunca más de 'haz' por encima del mejor
+      // (lo que queda más lejos no tiene opciones reales de ser la palabra).
+      umbral = res[0].c + haz;
+      if (res.length >= nRes && res[res.length - 1].c < umbral) umbral = res[res.length - 1].c;
+    }
+
+    // Columnas DP de un nodo del trie (nivel d) a partir del estado final de su padre.
+    // Estados por letra: T (tránsito desde la letra anterior), A (primera muestra de la
+    // fijación), L (fijación con >= 2 muestras = final de la letra). Sólo L se guarda
+    // (es lo que leen los hijos); T y A se arrastran como escalares.
+    // Devuelve la cota inferior (sin prior) de cualquier palabra del subárbol.
+    function calcular(nodo, b, finPrev, loPrev, hiPrev, zPrev, lim) {
+      llamadas++;
+      var cf = cF[nodo.zona], so = sufDe(nodo.mascara) + 1, suf = sufPool, L = b.L;
+      var tPrev = INF, aPrev = INF, lPrev = INF, m = INF, primero = -1, ultimo = -1, fin = INF;
+      var raizP = zPrev < 0;
+      var ct = raizP ? cf : costeTransito(zPrev, nodo.zona);
+      var lo = raizP ? 0 : loPrev + 1;
+      if (lo >= N) return INF;
+      for (var t = lo; t < N; t++) {
+        var c = cf[t], s1 = suf[so + t], mn, v;
+        // L: seguir en la fijación (o segunda muestra tras A)
+        var nl = c + (lPrev < aPrev ? lPrev : aPrev);
+        // entrada a la letra: desde basura inicial (raíz) o desde la letra anterior
+        if (raizP) {
+          mn = t > 0 ? pre[t - 1] : 0;
+        } else {
+          if (t - 1 <= hiPrev) mn = finPrev[t - 1];
+          else if (tPrev === INF && aPrev === INF && lPrev === INF) break; // nada vivo
+          else mn = INF;
+          if (tPrev < mn) mn = tPrev;
+          v = ct[t] + mn;
+          tPrev = v + s1 < lim ? v : INF;
+        }
+        v = c + mn;
+        aPrev = v + s1 < lim ? v : INF;
+        if (nl + s1 < lim) {
+          lPrev = nl;
+          if (primero < 0) primero = t;
+          ultimo = t;
+          if (nl + s1 < m) m = nl + s1;
+          v = nl + g * (N - 1 - t); // terminar aquí: el resto es cola de basura
+          if (v < fin) fin = v;
+        } else lPrev = INF;
+        L[t] = lPrev;
+      }
+      b.lo = primero; b.hi = ultimo; b.fin = fin;
+      return m;
+    }
+
+    // Expande los hijos de un nodo: calcula todas sus columnas (nivel d) y los recorre
+    // de mejor a peor cota (+ prior), para encontrar pronto buenas palabras y podar más.
+    var orden = [];
+    function expandir(nodo, d, finPrev, loPrev, hiPrev) {
+      var hijos = nodo.lista, nivel = buf[d], cnt = 0, k, j;
+      for (k = 0; k < hijos.length; k++) {
+        var h = hijos[k], pr = lambda * h.pr;
+        if (pr >= umbral) break; // hijos ordenados por mejor rango
+        var b = nivel[cnt];
+        var m = calcular(h, b, finPrev, loPrev, hiPrev, nodo.zona, umbral - pr);
+        if (m + pr >= umbral) continue;
+        b.cota = m + pr; b.nodo = h; cnt++;
+      }
+      if (!cnt) return;
+      // ordenar por inserción (cnt <= Z); 'orden' guarda índices por nivel
+      var base = d * Z;
+      for (k = 0; k < cnt; k++) {
+        j = k;
+        while (j > 0 && nivel[orden[base + j - 1]].cota > nivel[k].cota) { orden[base + j] = orden[base + j - 1]; j--; }
+        orden[base + j] = k;
+      }
+      for (k = 0; k < cnt; k++) {
+        var bb = nivel[orden[base + k]];
+        if (bb.cota >= umbral) break;
+        visitar(bb, d);
+      }
+    }
+
+    function visitar(b, d) {
+      var nodo = b.nodo;
+      if (nodo.palabras) {
+        var fin = b.fin, ps = nodo.palabras;
+        for (var i = 0; i < ps.length && i < nRes; i++) {
+          var c = fin + lambda * ps[i].pr;
+          if (c >= umbral) break;
+          insertar(ps[i].w, c);
+        }
+      }
+      if (d < profMax && nodo.lista.length) expandir(nodo, d + 1, b.L, b.lo, b.hi);
+    }
+
+    var ptsX = null, ptsY = null;
+    function decodificarHMM(pts, n) {
+      N = pts.n; ptsX = pts.x; ptsY = pts.y; nRes = n;
+      inv = 1 / (2 * P.s * P.s); tope = P.tope; g = P.basura; pen = P.penTransito;
+      lambda = P.lambda; haz = P.haz;
+      reservar(N);
+      var X = ptsX, Y = ptsY, t, z;
+      for (z = 0; z < Z; z++) {
+        var a = cF[z];
+        for (t = 0; t < N; t++) {
+          var dx = X[t] - ZX[z], dy = Y[t] - ZY[z];
           var c = (dx * dx + dy * dy) * inv;
           a[t] = c < tope ? c : tope;
         }
-        cF[zz] = a;
       }
-      // Coste de tránsito por par de zonas (distancia al segmento)
-      var cT = new Array(Z * Z);
-      function costeTransito(z1, z2) {
-        var idx = z1 * Z + z2;
-        if (cT[idx]) return cT[idx];
-        var a = new Float64Array(N);
-        var ax = ZX[z1], ay = ZY[z1], bx = ZX[z2] - ax, by = ZY[z2] - ay, L = bx * bx + by * by;
-        for (var t = 0; t < N; t++) {
-          var px = X[t] - ax, py = Y[t] - ay, u = (px * bx + py * by) / L;
-          if (u < 0) u = 0; else if (u > 1) u = 1;
-          var dx = px - u * bx, dy = py - u * by;
-          var c = (dx * dx + dy * dy) * inv;
-          a[t] = (c < tope ? c : tope) + P.penTransito;
-        }
-        cT[idx] = a;
-        return a;
-      }
-      // Cota inferior del coste de cada muestra (cualquier estado) y su suma de sufijo:
-      // permite podar celdas cuyo coste + lo que falta ya supera al n-ésimo mejor.
-      var lbBase = g < P.penTransito ? g : P.penTransito;
-      var sufCache = {};
-      function sufDe(mascara) {
-        var suf = sufCache[mascara];
-        if (suf) return suf;
-        suf = new Float64Array(N + 1);
-        for (var t = N - 1; t >= 0; t--) {
-          var lb = lbBase;
-          for (var z = 0; z < Z; z++) if ((mascara >> z) & 1 && cF[z][t] < lb) lb = cF[z][t];
-          suf[t] = suf[t + 1] + lb;
-        }
-        sufCache[mascara] = suf;
-        return suf;
-      }
-      // Buffers por profundidad.
-      var buf = [];
-      for (var d = 0; d <= profMax; d++) {
-        var bb = { T: new Float64Array(N), F: [], lo: 0 };
-        for (var r = 0; r < K; r++) bb.F.push(new Float64Array(N));
-        buf.push(bb);
-      }
-      // Prefijo de basura: pre[t] = coste de cubrir 0..t con basura (pre[-1] = 0).
-      var pre = new Float64Array(N);
+      cT = new Array(Z * Z);
+      sufIdx.fill(0); sufUsados = 0;
+      if (lbTmp.length < N) lbTmp = new Float64Array(cap);
       for (t = 0; t < N; t++) pre[t] = g * (t + 1);
+      res = []; umbral = INF; llamadas = 0;
 
-      var lambda = P.lambda, haz = P.haz;
-      var res = []; // top nRes: {w, c}, ordenado por c
-      var umbral = Infinity;
-      function insertar(w, c) {
-        for (var j = 0; j < res.length; j++) if (res[j].w === w) return;
-        var i = res.length;
-        res.push(null);
-        while (i > 0 && res[i - 1].c > c) { res[i] = res[i - 1]; i--; }
-        res[i] = { w: w, c: c };
-        if (res.length > nRes) res.length = nRes;
-        // Umbral de poda: el n-ésimo mejor, y nunca más de 'haz' por encima del mejor
-        // (lo que queda más lejos no tiene opciones reales de ser la palabra).
-        umbral = res[0].c + haz;
-        if (res.length >= nRes && res[res.length - 1].c < umbral) umbral = res[res.length - 1].c;
-      }
-
-      // Calcula las columnas del nodo (nivel d) a partir del estado final del padre.
-      // Devuelve la cota inferior de cualquier palabra del subárbol sin prior (o Infinity).
-      var INF = Infinity;
-      function calcular(nodo, d, finPrev, loPrev, zPrev, lim) {
-        llamadas++;
-        var b = buf[d], cf = cF[nodo.zona], F = b.F, t, v, w, suf = sufDe(nodo.mascara);
-        var F0 = F[0], lo, r, A, B;
-        if (zPrev < 0) {
-          lo = 0;
-          F0[0] = cf[0];
-          for (t = 1; t < N; t++) F0[t] = cf[t] + pre[t - 1];
-        } else {
-          lo = loPrev + 1;
-          if (lo >= N) return INF;
-          var ct = costeTransito(zPrev, nodo.zona), T = b.T;
-          T[lo - 1] = INF;
-          for (t = lo; t < N; t++) {
-            var fp = finPrev[t - 1]; v = T[t - 1];
-            var mn = fp < v ? fp : v;
-            w = ct[t] + mn;
-            T[t] = w + suf[t + 1] < lim ? w : INF;
-            F0[t] = cf[t] + mn;
-          }
-          F0[lo - 1] = INF;
-        }
-        for (r = 1; r < K; r++) {
-          A = F[r - 1]; B = F[r];
-          if (lo > 0) B[lo - 1] = INF;
-          B[lo] = INF;
-          for (t = lo + 1; t < N; t++) B[t] = cf[t] + A[t - 1];
-        }
-        var L = F[K - 1], m = INF, primero = -1;
-        if (K > 1) {
-          A = F[K - 2];
-          for (t = lo + 1; t < N; t++) {
-            v = L[t - 1]; w = A[t - 1];
-            v = cf[t] + (v < w ? v : w);
-            if (v + suf[t + 1] < lim) {
-              L[t] = v;
-              if (primero < 0) primero = t;
-              if (v + suf[t + 1] < m) m = v + suf[t + 1];
-            } else L[t] = INF;
-          }
-        } else {
-          for (t = lo; t < N; t++) {
-            v = L[t];
-            if (t > lo && L[t - 1] + cf[t] < v) v = L[t - 1] + cf[t];
-            if (v + suf[t + 1] < lim) {
-              L[t] = v;
-              if (primero < 0) primero = t;
-              if (v + suf[t + 1] < m) m = v + suf[t + 1];
-            } else L[t] = INF;
-          }
-        }
-        b.lo = primero;
-        return m;
-      }
-
-      function visitar(nodo, d) {
-        var L = buf[d].F[K - 1], lo = buf[d].lo, t;
-        if (nodo.palabras) {
-          var fin = INF;
-          for (t = lo; t < N; t++) { var v = L[t] + g * (N - 1 - t); if (v < fin) fin = v; }
-          var ps = nodo.palabras;
-          for (var i = 0; i < ps.length && i < nRes; i++) {
-            var c = fin + lambda * ps[i].pr;
-            if (c >= umbral) break;
-            insertar(ps[i].w, c);
-          }
-        }
-        if (d >= profMax) return;
-        var hijos = nodo.lista;
-        // Cada hijo se procesa completo (calcular + recursión) antes del siguiente,
-        // porque los buffers del nivel d+1 se reutilizan.
-        for (var k = 0; k < hijos.length; k++) {
-          var h = hijos[k], pr = lambda * h.pr;
-          if (pr >= umbral || h.mejorR > rMax) break; // hijos ordenados por mejor rango
-          var m = calcular(h, d + 1, L, lo, nodo.zona, umbral - pr);
-          if (m + pr >= umbral) continue;
-          visitar(h, d + 1);
-        }
-      }
-
-      // Dos pasadas: primero sólo palabras frecuentes (da pronto un umbral ajustado),
-      // luego todo el diccionario con ese umbral.
-      var rMax, llamadas = 0;
-      function buscar(limite) {
-        rMax = limite;
-        var hijos0 = raiz.lista;
-        for (var k = 0; k < hijos0.length; k++) {
-          var h = hijos0[k], pr = lambda * h.pr;
-          if (pr >= umbral || h.mejorR > rMax) break;
-          var m = calcular(h, 1, pre, 0, -1, umbral - pr);
-          if (m + pr >= umbral) continue;
-          visitar(h, 1);
-        }
-      }
-      buscar(PASADA1);
-      buscar(Infinity);
+      expandir(raiz, 1, pre, 0, N - 1);
       estadisticas.nodos = llamadas;
+      estadisticas.mascaras = sufUsados;
       estadisticas.muestras = N;
       return res;
     }
@@ -440,7 +451,12 @@
     }
 
     return {
-      zonas: zonas.map(function (q) { return { letras: q.letras, x: q.x, y: q.y }; }),
+      // zonas: centros (x,y) y, si es una cuadrícula, ancho/alto de la celda (mismas unidades)
+      zonas: zonas.map(function (q) {
+        var o = { letras: q.letras, x: q.x, y: q.y };
+        if (q.ancho) { o.ancho = q.ancho; o.alto = q.alto; o.fila = q.fila; o.columna = q.columna; }
+        return o;
+      }),
       zonaDe: zonaDe,
       plantilla: plantilla,
       decodificar: decodificar,

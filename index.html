@@ -1000,7 +1000,10 @@ function onResults(res) {
   if (testing) updateCalibTest(fr, thrF);
   if (S.mode === 'swipe' && !testing) {
     G.dir = null; setDwellProgress(null, 0);
-    if (!S.paused) swipeSample(G.sx, G.sy, f.t);
+    // Aquí no se usa el suavizado fuerte (retrasa ~150 ms y hace que la mirada «pase» por zonas intermedias):
+    // solo la mediana de los 3 últimos fotogramas; el decodificador ya tolera el ruido.
+    const b3 = G.buf.slice(-3);
+    if (!S.paused) swipeSample(median(b3.map((p) => p.x)), median(b3.map((p) => p.y)), f.t);
     drawDebug(); return;
   }
   if ((S.paused && !testing) || t < G.suppressUntil || !G.armed || bv < thrF) {
@@ -1553,6 +1556,18 @@ function swipeSample(nx, ny, t) {
   const k = toKb(p.left, p.top);
   if (k.dentro) {
     SW.readT = 0; swCandDwell(-1, t);
+    // Tras el parpadeo la mirada sigue un momento en la última letra de la palabra anterior: esas muestras no
+    // cuentan, salvo que te quedes ahí más de medio segundo (entonces la palabra nueva empieza en esa zona).
+    if (SW.hold) {
+      if (t < SW.hold.desde) return;
+      const z = SW.dec.zonaDe(k.x, k.y);
+      if (z === SW.hold.zona) {
+        SW.hold.buf.push({ x: k.x, y: k.y, t });
+        if (t - SW.hold.buf[0].t < 500) return;
+        SW.pts = SW.hold.buf.slice(0, -1);
+      }
+      SW.hold = null;
+    }
     SW.pts.push({ x: k.x, y: k.y, t });
     while (SW.pts.length && t - SW.pts[0].t > 9000) SW.pts.shift();
   } else {
@@ -1590,6 +1605,8 @@ function swipeAccept(closeStart, source) {
   // Se quitan las muestras de justo antes del parpadeo: al cerrar los ojos la mirada estimada cae hacia abajo.
   const pts = SW.pts.filter((p) => p.t < closeStart - 180);
   SW.pts = [];
+  const last = pts[pts.length - 1];
+  SW.hold = last && SW.dec ? { zona: SW.dec.zonaDe(last.x, last.y), desde: now() + 150, buf: [] } : null;
   swDecode(pts, source);
 }
 function swChoose(i, source) {
@@ -1608,7 +1625,7 @@ function swRender() {
   if (!$('swipe').classList.contains('on')) return;
   const w = S.words.slice();
   $('sOut').innerHTML = w.length ? w.map((x, i) => (i === SW.lastIdx ? '<span class="last">' + esc(x) + '</span>' : esc(x))).join('&nbsp;') + '&nbsp;'
-    : '<span class="muted">Recorre con la mirada las letras de la palabra y parpadea largo para terminarla. Sin cámara: arrastra el dedo.</span>';
+    : '<span class="muted">Mira cada letra de la palabra un instante, una tras otra, y parpadea largo para terminarla. Empieza en la primera letra justo después del parpadeo. Sin cámara: arrastra el dedo parándote en cada letra.</span>';
   const alts = SW.cands.slice(1, 4);
   $('sCands').innerHTML = alts.map((c, i) => '<button data-i="' + (i + 1) + '"><span>' + esc(c.w) + '</span></button>').join('');
   $('sCands').querySelectorAll('button').forEach((b) => { b.onclick = () => swChoose(+b.dataset.i, 'manual'); });

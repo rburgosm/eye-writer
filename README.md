@@ -33,10 +33,20 @@ Alternativa: cualquier hosting estático con HTTPS (Netlify Drop, Cloudflare Pag
 
 La primera vez necesita red para descargar MediaPipe (cdn.jsdelivr.net, ~10 MB); después funciona sin red.
 
+## Escritura por recorrido (modo «Recorrido»)
+
+En vez de mirar a un lado y volver al centro por cada letra, recorres con la mirada las letras de la palabra, una tras otra, parándote un instante en cada una (~0,15–0,3 s), y cierras la palabra con un **parpadeo largo**. Ojos cerrados ≥ 1,5 s borra la última palabra. Debajo del texto salen 3 alternativas: mirar una 0,9 s la pone en lugar de la última palabra (o tócala). Sin cámara se practica arrastrando el dedo y parándote en cada letra.
+
+Teclado de 12 zonas grandes en orden alfabético (3 filas × 4): `A | BCD | EFG | HIJ` · `KL | M | NÑ | OP` · `QR | S | T | UVWXYZ`. El decodificador (`recorrido.js`) alinea el camino de la mirada con las zonas de cada una de las 15 000 palabras y suma la frecuencia de la palabra; tarda 1–3 ms por palabra. En simulación (`node test/recorrido.test.js`) acierta a la primera el 82–87 % de las palabras y está entre las 3 primeras el 95–97 % con el ruido simulado; con la cara simulada dentro de la app, 9 de 10 palabras. Puntos débiles: palabras con las mismas zonas solo se distinguen por frecuencia (que/qué, esta/está), y una desviación constante de la mirada perjudica más que el temblor.
+
 ## Calibrar y practicar
 
 1. **Aprende el método sin cámara**: usa los botones o, con teclado, las flechas, Intro (aceptar) y Retroceso (borrar). Prueba «Copiar frase»: la pista muestra los gestos de cada palabra.
 2. **Activar cámara → Calibrar**. Ponte en la postura real y elígela en el selector. Comprueba que se ven tus ojos ampliados con el iris marcado y la distancia estimada (lo ideal: 25–50 cm). Después un punto recorre 18 posiciones conocidas de la pantalla (centro, bordes, esquinas, puntos intermedios, bordes otra vez y centro): fija la vista en su puntito central **solo con los ojos**.
+
+   **Punto en movimiento.** Después de los puntos fijos, el punto recorre el borde y un ocho durante 16 s (se puede quitar en Ajustes). Da cientos de muestras con posición conocida: se estima el retraso de la cámara, se comprueba la precisión con datos que no se usaron para ajustar y se elige un modelo lineal o curvo según cuál acierta más.
+
+   **Datos.** Toda la calibración se graba (cada fotograma con los 18 puntos de ojos e iris en píxeles, e imágenes de los ojos). En Depuración: «Grabar 15 s», «Descargar datos completos» o «Compartir archivo» (JSON, ~0,5 MB). Los datos no salen del móvil salvo que los compartas.
 
    **Calibración geométrica.** Cada punto se pasa a centímetros (1 px CSS ≈ 1/160 pulgada en Android) y se calcula el ángulo real desde tu ojo hasta él: la distancia sale del tamaño del iris (≈ 11,7 mm en casi todas las personas) y la posición del ojo, de dónde aparece la cara en la imagen respecto a la cámara (encima de la pantalla en vertical). El modelo aprende iris + cabeza + párpados → ángulo de mirada, y en uso se calcula el punto como ojo + ángulo × distancia. Así, si acercas o alejas el móvil o mueves la cabeza, el punto sigue en su sitio. Con una cara simulada el error se mantuvo en 2–3 % de la pantalla a 25, 35 y 45 cm y con la cabeza desplazada 3 cm; sin la parte geométrica subía a 18–29 % al cambiar la distancia y a más del 100 % al mover la cabeza. Al terminar muestra el ángulo que abarca la pantalla, el error en grados, el temblor y la deriva, propone un umbral y deja probarlo con un círculo que sigue la mirada.
 3. Ajustes: umbral (75 % del camino al borde), permanencia (500 ms), suavizado (60 %), corrección lenta de deriva, zoom a los ojos y compensación del giro de cabeza (se aplica al recalibrar).
