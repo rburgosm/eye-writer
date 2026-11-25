@@ -86,6 +86,8 @@
       penTransito: opc.penTransito != null ? opc.penTransito : 1.2,
       K: opc.K || 2,              // permanencia mínima (muestras) en cada fijación
       lambda: opc.lambda != null ? opc.lambda : 1.4, // peso del prior de frecuencia
+      haz: opc.haz || 8,
+      bin: opc.bin != null ? opc.bin : 0, // ms por intervalo (0 = sin agrupar)
       metodo: opc.metodo || 'hmm'
     };
 
@@ -130,8 +132,16 @@
     // Hijos como arrays (iteración rápida)
     (function compactar(n) {
       n.lista = [];
-      for (var key in n.hijos) { n.lista.push(n.hijos[key]); compactar(n.hijos[key]); }
+      // mascara: zonas que puede visitar cualquier palabra del subárbol desde este nodo
+      // (la propia y las siguientes); sirve para acotar el coste de lo que falta.
+      n.mascara = n.zona >= 0 ? (1 << n.zona) : 0;
+      for (var key in n.hijos) {
+        var h = n.hijos[key];
+        n.lista.push(h); compactar(h); n.mascara |= h.mascara;
+      }
       n.hijos = null;
+      n.pr = Math.log(n.mejorR + 1);
+      if (n.palabras) n.palabras.forEach(function (e) { e.pr = Math.log(e.r + 1); });
     })(raiz);
     var profMax = 0;
     clases.forEach(function (c) { if (c.seq.length > profMax) profMax = c.seq.length; });
@@ -156,26 +166,42 @@
     }
 
     // --- Preprocesado de puntos ---
+    // Agrupa las muestras en intervalos de P.bin ms (media; mediana si hay >= 3) para
+    // que el decodificador no dependa de la frecuencia de muestreo y vaya más rápido.
+    // Sin marcas de tiempo válidas se asume ~25 Hz.
     function prepararPuntos(puntos) {
-      var xs = [], ys = [];
+      var xs = [], ys = [], ts = [], conT = true;
       for (var i = 0; i < puntos.length; i++) {
         var q = puntos[i];
         if (!q || !isFinite(q.x) || !isFinite(q.y)) continue;
-        xs.push(q.x); ys.push(q.y);
+        xs.push(+q.x); ys.push(+q.y);
+        if (!isFinite(q.t)) conT = false;
+        ts.push(+q.t);
       }
-      // Si la tasa es alta (> ~120 muestras), promediar en bloques para acotar el coste.
       var n = xs.length;
-      if (n > 120) {
-        var f = Math.ceil(n / 120), nx = [], ny = [];
-        for (var j = 0; j < n; j += f) {
-          var sx = 0, sy = 0, c = 0;
-          for (var k = j; k < Math.min(n, j + f); k++) { sx += xs[k]; sy += ys[k]; c++; }
-          nx.push(sx / c); ny.push(sy / c);
+      if (!conT) for (i = 0; i < n; i++) ts[i] = i * 40;
+      var bin = P.bin, ox = [], oy = [];
+      if (!(bin > 0)) return { x: xs, y: ys, n: n };
+      var t0 = ts[0], j = 0;
+      while (j < n) {
+        var k = Math.floor((ts[j] - t0) / bin), e = j;
+        while (e < n && Math.floor((ts[e] - t0) / bin) === k) e++;
+        if (e === j) e = j + 1; // marcas no monótonas: avanzar igualmente
+        var c = e - j;
+        if (c >= 3) {
+          var bx = xs.slice(j, e).sort(num), by = ys.slice(j, e).sort(num);
+          ox.push(c & 1 ? bx[c >> 1] : (bx[c / 2 - 1] + bx[c / 2]) / 2);
+          oy.push(c & 1 ? by[c >> 1] : (by[c / 2 - 1] + by[c / 2]) / 2);
+        } else {
+          var sx = 0, sy = 0;
+          for (i = j; i < e; i++) { sx += xs[i]; sy += ys[i]; }
+          ox.push(sx / c); oy.push(sy / c);
         }
-        xs = nx; ys = ny;
+        j = e;
       }
-      return { x: xs, y: ys, n: xs.length };
+      return { x: ox, y: oy, n: ox.length };
     }
+    function num(a, b) { return a - b; }
 
     // --- Método HMM / DTW sobre trie ---
     function decodificarHMM(pts, nRes) {
@@ -211,11 +237,19 @@
       }
       // Cota inferior del coste de cada muestra (cualquier estado) y su suma de sufijo:
       // permite podar celdas cuyo coste + lo que falta ya supera al n-ésimo mejor.
-      var suf = new Float64Array(N + 1);
-      for (t = N - 1; t >= 0; t--) {
-        var lb = g < P.penTransito ? g : P.penTransito;
-        for (zz = 0; zz < Z; zz++) if (cF[zz][t] < lb) lb = cF[zz][t];
-        suf[t] = suf[t + 1] + lb;
+      var lbBase = g < P.penTransito ? g : P.penTransito;
+      var sufCache = {};
+      function sufDe(mascara) {
+        var suf = sufCache[mascara];
+        if (suf) return suf;
+        suf = new Float64Array(N + 1);
+        for (var t = N - 1; t >= 0; t--) {
+          var lb = lbBase;
+          for (var z = 0; z < Z; z++) if ((mascara >> z) & 1 && cF[z][t] < lb) lb = cF[z][t];
+          suf[t] = suf[t + 1] + lb;
+        }
+        sufCache[mascara] = suf;
+        return suf;
       }
       // Buffers por profundidad.
       var buf = [];
@@ -228,6 +262,7 @@
       var pre = new Float64Array(N);
       for (t = 0; t < N; t++) pre[t] = g * (t + 1);
 
+      var lambda = P.lambda, haz = P.haz;
       var res = []; // top nRes: {w, c}, ordenado por c
       var umbral = Infinity;
       function insertar(w, c) {
@@ -237,7 +272,10 @@
         while (i > 0 && res[i - 1].c > c) { res[i] = res[i - 1]; i--; }
         res[i] = { w: w, c: c };
         if (res.length > nRes) res.length = nRes;
-        if (res.length >= nRes) umbral = res[res.length - 1].c;
+        // Umbral de poda: el n-ésimo mejor, y nunca más de 'haz' por encima del mejor
+        // (lo que queda más lejos no tiene opciones reales de ser la palabra).
+        umbral = res[0].c + haz;
+        if (res.length >= nRes && res[res.length - 1].c < umbral) umbral = res[res.length - 1].c;
       }
 
       // Calcula las columnas del nodo (nivel d) a partir del estado final del padre.
@@ -245,7 +283,7 @@
       var INF = Infinity;
       function calcular(nodo, d, finPrev, loPrev, zPrev, lim) {
         llamadas++;
-        var b = buf[d], cf = cF[nodo.zona], F = b.F, t, v, w;
+        var b = buf[d], cf = cF[nodo.zona], F = b.F, t, v, w, suf = sufDe(nodo.mascara);
         var F0 = F[0], lo, r, A, B;
         if (zPrev < 0) {
           lo = 0;
@@ -305,7 +343,7 @@
           for (t = lo; t < N; t++) { var v = L[t] + g * (N - 1 - t); if (v < fin) fin = v; }
           var ps = nodo.palabras;
           for (var i = 0; i < ps.length && i < nRes; i++) {
-            var c = fin + priorDe(ps[i].r);
+            var c = fin + lambda * ps[i].pr;
             if (c >= umbral) break;
             insertar(ps[i].w, c);
           }
@@ -315,7 +353,7 @@
         // Cada hijo se procesa completo (calcular + recursión) antes del siguiente,
         // porque los buffers del nivel d+1 se reutilizan.
         for (var k = 0; k < hijos.length; k++) {
-          var h = hijos[k], pr = priorDe(h.mejorR);
+          var h = hijos[k], pr = lambda * h.pr;
           if (pr >= umbral || h.mejorR > rMax) break; // hijos ordenados por mejor rango
           var m = calcular(h, d + 1, L, lo, nodo.zona, umbral - pr);
           if (m + pr >= umbral) continue;
@@ -330,7 +368,7 @@
         rMax = limite;
         var hijos0 = raiz.lista;
         for (var k = 0; k < hijos0.length; k++) {
-          var h = hijos0[k], pr = priorDe(h.mejorR);
+          var h = hijos0[k], pr = lambda * h.pr;
           if (pr >= umbral || h.mejorR > rMax) break;
           var m = calcular(h, 1, pre, 0, -1, umbral - pr);
           if (m + pr >= umbral) continue;

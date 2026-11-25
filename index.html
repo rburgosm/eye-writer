@@ -126,6 +126,24 @@ label.chk input { width: 22px; height: 22px; }
 #mCard { border: 3px solid var(--accent); border-bottom: 3px dashed var(--muted); border-radius: 12px 12px 0 0; background: var(--soft); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); flex: none; }
 #measure input[type=range] { width: min(90vw, 420px); }
 #measure .row { width: min(90vw, 420px); }
+#swipe { position: fixed; inset: 0; z-index: 45; background: var(--bg); display: none; flex-direction: column; touch-action: none; user-select: none; }
+#swipe.on { display: flex; }
+#swipe .sTop { flex: none; height: 24vh; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--line); }
+#swipe .sOut { flex: 1; min-height: 0; overflow: hidden; font-size: 22px; line-height: 1.25; display: flex; align-items: flex-end; flex-wrap: wrap; overflow-wrap: anywhere; }
+#swipe .sOut .last { background: var(--soft); border-bottom: 3px solid var(--accent); padding: 0 2px; }
+#swipe .sCands { display: flex; gap: 6px; min-height: 40px; }
+#swipe .sCands button { flex: 1; min-height: 40px; padding: 4px; font-size: 17px; position: relative; overflow: hidden; }
+#swipe .sCands button::before { content: ""; position: absolute; inset: 0; background: var(--fill); transform-origin: left; transform: scaleX(var(--p, 0)); }
+#swipe .sCands button > span { position: relative; }
+#swipe .sBar { display: flex; gap: 6px; align-items: center; }
+#swipe .sBar button { min-height: 36px; padding: 4px 10px; font-size: 14px; }
+#swipe .sBar span { margin-left: auto; font-size: 12px; text-align: right; }
+#sKb { position: relative; flex: 1; min-height: 0; }
+#sKb .zona { position: absolute; display: flex; align-items: center; justify-content: center; text-align: center; border: 2px solid var(--line); border-radius: 14px; margin: 3px;
+  font-size: clamp(20px, 6.5vw, 34px); font-weight: 800; letter-spacing: 2px; color: var(--ink); background: var(--panel); transition: background .12s; }
+#sKb .zona:nth-child(odd) { background: var(--soft); }
+#sKb .zona.hot { background: var(--fill); border-color: var(--accent); }
+#sTrail { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 #closedBadge { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 6px 14px; font-weight: 700; display: none; }
 .muted { color: var(--muted); font-size: 14px; }
 label.postura { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 15px; color: var(--muted); margin: 4px 0; }
@@ -153,6 +171,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
   <div class="seg" role="tablist">
     <button id="modeFree" class="on">Escritura libre</button>
     <button id="modeCopy">Copiar frase</button>
+    <button id="modeSwipe">Recorrido</button>
   </div>
 
   <div id="targetBox" class="target" hidden></div>
@@ -245,6 +264,19 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
 
 <div id="closedBadge"></div>
 
+<!-- Escritura por recorrido: teclado de zonas a pantalla completa -->
+<div id="swipe" role="application" aria-label="Escritura por recorrido">
+  <div class="sTop">
+    <div id="sOut" class="sOut" aria-live="polite"></div>
+    <div id="sCands" class="sCands"></div>
+    <div class="sBar">
+      <button id="sExit">Salir</button><button id="sDel">Borrar</button><button id="sSpeak">Leer</button><button id="sCal">Calibrar</button>
+      <span id="sInfo" class="muted"></span>
+    </div>
+  </div>
+  <div id="sKb"><canvas id="sTrail"></canvas></div>
+</div>
+
 <div id="measure" role="dialog" aria-modal="true">
   <div class="big" style="font-size:24px;font-weight:800">Medir la pantalla</div>
   <div class="sub muted" style="font-size:16px;max-width:30em">Apoya una tarjeta de tamaño estándar (bancaria, DNI, tarjeta sanitaria: 85,6 × 54 mm) <b>en vertical</b> sobre el rectángulo, alineada con su esquina superior izquierda,
@@ -277,6 +309,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
 </div>
 
 <script src="palabras.js"></script>
+<script src="recorrido.js"></script>
 <script>
 'use strict';
 /* ============================ Configuración ============================ */
@@ -456,7 +489,7 @@ function finishSession() {
   S.result = st;
   if (st.palabras > 0) {
     const fuente = st.porcMirada >= 80 ? 'mirada' : (st.porcMirada > 0 ? 'mixto' : 'práctica');
-    history.unshift(Object.assign({ fecha: new Date().toISOString(), modo: S.mode === 'copy' ? 'copiar' : 'libre', fuente, texto: currentText(), objetivo: S.target || null }, st));
+    history.unshift(Object.assign({ fecha: new Date().toISOString(), modo: S.mode === 'copy' ? 'copiar' : S.mode === 'swipe' ? 'recorrido' : 'libre', fuente, texto: currentText(), objetivo: S.target || null }, st));
     history = history.slice(0, 300);
     lsSet(LS.hist, history);
   }
@@ -467,7 +500,7 @@ function statsText() {
   const st = S.result || computeStats();
   const lines = [
     'EyeType · ' + new Date().toLocaleString('es-ES'),
-    'Modo: ' + (S.mode === 'copy' ? 'copiar frase' : 'libre') + ' · entrada por mirada: ' + st.porcMirada + ' %',
+    'Modo: ' + (S.mode === 'copy' ? 'copiar frase' : S.mode === 'swipe' ? 'recorrido' : 'libre') + ' · entrada por mirada: ' + st.porcMirada + ' %',
     'Tiempo: ' + fmtTime(st.segundos) + ' · PPM: ' + st.ppm + ' · palabras: ' + st.palabras + ' · caracteres: ' + st.caracteres,
     'Borrados: ' + st.borrados + ' · gestos: ' + st.gestos + ' · gestos/palabra: ' + st.gestosPorPalabra + (st.error !== null ? ' · error: ' + st.error + ' %' : ''),
     'Texto: «' + currentText() + '»' + (S.target ? ' · objetivo: «' + S.target + '»' : ''),
@@ -955,7 +988,7 @@ function onResults(res) {
   G.sy = G.sy === null ? my : G.sy + a * (my - G.sy);
   const thrF = settings.thr / 100, retF = settings.ret / 100;
   // Corrección de deriva: si la mirada está en reposo en la zona central, el centro se reajusta muy despacio (~40 s).
-  if (settings.drift && G.armed && !G.dir && Math.abs(G.sx) < retF && Math.abs(G.sy) < retF) {
+  if (settings.drift && S.mode !== 'swipe' && G.armed && !G.dir && Math.abs(G.sx) < retF && Math.abs(G.sy) < retF) {
     G.bias.x += dt / 40 * G.sx; G.bias.y += dt / 40 * G.sy;
   }
   const fr = { left: Math.max(0, -G.sx), right: Math.max(0, G.sx), up: Math.max(0, -G.sy), down: Math.max(0, G.sy) };
@@ -965,6 +998,11 @@ function onResults(res) {
   if (bv < retF) G.armed = true;
   const testing = calibOpen();
   if (testing) updateCalibTest(fr, thrF);
+  if (S.mode === 'swipe' && !testing) {
+    G.dir = null; setDwellProgress(null, 0);
+    if (!S.paused) swipeSample(G.sx, G.sy, f.t);
+    drawDebug(); return;
+  }
   if ((S.paused && !testing) || t < G.suppressUntil || !G.armed || bv < thrF) {
     G.dir = null; setDwellProgress(null, 0);
   } else {
@@ -998,7 +1036,10 @@ function handleBlink(closed, t) {
       G.closing = false; badge.style.display = 'none';
       G.suppressUntil = t + 250; G.armed = false;
       if (!quiet) {
-        if (dur >= settings.close) handleGesture('delete', 'mirada');
+        if (S.mode === 'swipe') {
+          if (dur >= settings.close) swipeDelete('mirada');
+          else if (dur >= settings.blink) swipeAccept(G.closeStart, 'mirada');
+        } else if (dur >= settings.close) handleGesture('delete', 'mirada');
         else if (dur >= settings.blink) handleGesture('accept', 'mirada');
       }
     }
@@ -1466,9 +1507,154 @@ function bindSettings() {
 }
 function setMode(m) {
   S.mode = m;
-  $('modeFree').classList.toggle('on', m === 'free'); $('modeCopy').classList.toggle('on', m === 'copy');
+  $('modeFree').classList.toggle('on', m === 'free'); $('modeCopy').classList.toggle('on', m === 'copy'); $('modeSwipe').classList.toggle('on', m === 'swipe');
   if (m === 'copy') nextTarget(); else resetSession(false);
+  if (m === 'swipe') openSwipe(); else closeSwipe();
 }
+
+/* ============================ Escritura por recorrido ============================ */
+// Recorres con la mirada las zonas de las letras de la palabra, sin volver al centro, y cierras con un parpadeo largo.
+// El decodificador (recorrido.js) compara el camino con el de cada palabra del diccionario.
+const SW = { dec: null, pts: [], manual: null, cands: [], lastIdx: -1, readT: 0, candI: -1, candT: 0, hot: -1, raf: 0, gaze: null };
+function swDec() {
+  if (!SW.dec) {
+    if (!window.Recorrido) { setMsg('No se cargó recorrido.js.', true); return null; }
+    SW.dec = window.Recorrido.crear(window.PALABRAS || []);
+  }
+  return SW.dec;
+}
+function openSwipe() {
+  const dec = swDec(); if (!dec) return;
+  $('swipe').classList.add('on');
+  const kb = $('sKb');
+  kb.querySelectorAll('.zona').forEach((z) => z.remove());
+  const xs = [...new Set(dec.zonas.map((z) => z.x.toFixed(3)))], ys = [...new Set(dec.zonas.map((z) => z.y.toFixed(3)))];
+  const cw = 100 / xs.length, ch = 100 / ys.length;
+  dec.zonas.forEach((z) => {
+    const d = document.createElement('div'); d.className = 'zona';
+    d.style.left = ((z.x + 1) / 2 * 100 - cw / 2) + '%'; d.style.top = ((z.y + 1) / 2 * 100 - ch / 2) + '%';
+    d.style.width = 'calc(' + cw + '% - 6px)'; d.style.height = 'calc(' + ch + '% - 6px)';
+    d.textContent = z.letras.toUpperCase();
+    if (z.letras.length > 4) { d.style.fontSize = 'clamp(16px, ' + (26 / z.letras.length).toFixed(1) + 'vw, 30px)'; d.style.letterSpacing = '0'; }
+    kb.insertBefore(d, $('sTrail'));
+  });
+  SW.pts = []; SW.cands = []; SW.lastIdx = -1;
+  G.armed = false;
+  swRender();
+  cancelAnimationFrame(SW.raf); SW.raf = requestAnimationFrame(swDraw);
+}
+function closeSwipe() { $('swipe').classList.remove('on'); cancelAnimationFrame(SW.raf); }
+function kbRect() { return $('sKb').getBoundingClientRect(); }
+function toKb(px, py) { const r = kbRect(); return { x: (px - r.left) / r.width * 2 - 1, y: (py - r.top) / r.height * 2 - 1, dentro: px >= r.left && px <= r.right && py >= r.top && py <= r.bottom }; }
+// Muestra de mirada (coordenadas de pantalla -1..1) mientras se escribe por recorrido.
+function swipeSample(nx, ny, t) {
+  const p = screenPos(Math.max(-1.2, Math.min(1.2, nx)), Math.max(-1.2, Math.min(1.2, ny)));
+  SW.gaze = { px: p.left, py: p.top, t };
+  const k = toKb(p.left, p.top);
+  if (k.dentro) {
+    SW.readT = 0; swCandDwell(-1, t);
+    SW.pts.push({ x: k.x, y: k.y, t });
+    while (SW.pts.length && t - SW.pts[0].t > 9000) SW.pts.shift();
+  } else {
+    // Mirando el texto o los candidatos: si dura, es que estás leyendo y el recorrido empieza de cero.
+    if (!SW.readT) SW.readT = t;
+    if (t - SW.readT > 600) SW.pts = [];
+    let ci = -1;
+    $('sCands').querySelectorAll('button').forEach((b, i) => { const r = b.getBoundingClientRect(); if (p.left >= r.left && p.left <= r.right && p.top >= r.top - 8 && p.top <= r.bottom + 8) ci = i; });
+    swCandDwell(ci, t);
+  }
+}
+// Mirar fijamente un candidato 0,9 s lo pone en lugar de la última palabra.
+function swCandDwell(i, t) {
+  const bs = $('sCands').querySelectorAll('button');
+  if (i !== SW.candI) { SW.candI = i; SW.candT = t; }
+  bs.forEach((b, j) => b.style.setProperty('--p', j === i ? Math.min(1, (t - SW.candT) / 900).toFixed(3) : '0'));
+  if (i >= 0 && t - SW.candT >= 900) { swChoose(i, 'mirada'); SW.candI = -1; }
+}
+function swDecode(pts, source) {
+  const dec = swDec(); if (!dec) return;
+  if (pts.length < 3) { beep(200, 0.15); return; }
+  const t0 = performance.now();
+  const res = dec.decodificar(pts, { n: 5 }) || [];
+  SW.lastMs = performance.now() - t0;
+  if (!res.length) { beep(200, 0.15); return; }
+  const t = now();
+  if (!S.start) S.start = t;
+  S.lastAction = t; S.gestures++; if (source === 'mirada') S.gazeGestures++;
+  S.words.push(res[0].w); S.accepted++;
+  SW.cands = res; SW.lastIdx = S.words.length - 1;
+  beep(880, 0.08);
+  render(); swRender();
+}
+function swipeAccept(closeStart, source) {
+  // Se quitan las muestras de justo antes del parpadeo: al cerrar los ojos la mirada estimada cae hacia abajo.
+  const pts = SW.pts.filter((p) => p.t < closeStart - 180);
+  SW.pts = [];
+  swDecode(pts, source);
+}
+function swChoose(i, source) {
+  const c = SW.cands[i]; if (!c || SW.lastIdx < 0 || SW.lastIdx !== S.words.length - 1) return;
+  S.words[SW.lastIdx] = c.w; S.gestures++; if (source === 'mirada') S.gazeGestures++;
+  S.lastAction = now();
+  SW.cands = [c].concat(SW.cands.filter((x, j) => j !== i));
+  beep(660, 0.06); render(); swRender();
+}
+function swipeDelete(source) {
+  if (S.words.length) { S.words.pop(); S.deletes++; S.gestures++; if (source === 'mirada') S.gazeGestures++; S.lastAction = now(); }
+  SW.cands = []; SW.lastIdx = -1; SW.pts = [];
+  beep(330, 0.12); render(); swRender();
+}
+function swRender() {
+  if (!$('swipe').classList.contains('on')) return;
+  const w = S.words.slice();
+  $('sOut').innerHTML = w.length ? w.map((x, i) => (i === SW.lastIdx ? '<span class="last">' + esc(x) + '</span>' : esc(x))).join('&nbsp;') + '&nbsp;'
+    : '<span class="muted">Recorre con la mirada las letras de la palabra y parpadea largo para terminarla. Sin cámara: arrastra el dedo.</span>';
+  const alts = SW.cands.slice(1, 4);
+  $('sCands').innerHTML = alts.map((c, i) => '<button data-i="' + (i + 1) + '"><span>' + esc(c.w) + '</span></button>').join('');
+  $('sCands').querySelectorAll('button').forEach((b) => { b.onclick = () => swChoose(+b.dataset.i, 'manual'); });
+  const st = S.result || computeStats();
+  $('sInfo').textContent = st.palabras + ' pal. · ' + st.ppm.toFixed(1) + ' ppm' + (SW.lastMs ? ' · ' + Math.round(SW.lastMs) + ' ms' : '');
+}
+// Dibuja el rastro de la mirada (o del dedo) y resalta la zona a la que miras.
+function swDraw() {
+  if (!$('swipe').classList.contains('on')) return;
+  const cv = $('sTrail'), r = kbRect(), dpr = Math.min(2, devicePixelRatio || 1);
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
+  const x = cv.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, r.width, r.height);
+  const pts = SW.manual || SW.pts, tNow = now();
+  const P = (p) => [(p.x + 1) / 2 * r.width, (p.y + 1) / 2 * r.height];
+  if (pts.length > 1) {
+    x.lineWidth = 5; x.lineCap = 'round'; x.lineJoin = 'round';
+    for (let i = 1; i < pts.length; i++) {
+      const a = SW.manual ? 0.8 : Math.max(0.1, 1 - (tNow - pts[i].t) / 6000);
+      x.strokeStyle = 'rgba(234, 88, 12,' + a.toFixed(2) + ')';
+      const [x0, y0] = P(pts[i - 1]), [x1, y1] = P(pts[i]);
+      x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke();
+    }
+  }
+  let hot = -1;
+  if (SW.gaze && tNow - SW.gaze.t < 500 && G.on) {
+    const gx = SW.gaze.px - r.left, gy = SW.gaze.py - r.top;
+    x.strokeStyle = '#dc2626'; x.lineWidth = 3; x.beginPath(); x.arc(gx, gy, 12, 0, 7); x.stroke();
+    const k = toKb(SW.gaze.px, SW.gaze.py); if (k.dentro && SW.dec) hot = SW.dec.zonaDe(k.x, k.y);
+  }
+  if (hot !== SW.hot) { SW.hot = hot; $('sKb').querySelectorAll('.zona').forEach((z, i) => z.classList.toggle('hot', i === hot)); }
+  SW.raf = requestAnimationFrame(swDraw);
+}
+// Práctica sin cámara: arrastrar el dedo o el ratón por las zonas.
+(function swPointer() {
+  const kb = $('sKb');
+  const add = (e) => { const k = toKb(e.clientX, e.clientY); SW.manual.push({ x: Math.max(-1, Math.min(1, k.x)), y: Math.max(-1, Math.min(1, k.y)), t: now() }); };
+  kb.addEventListener('pointerdown', (e) => { SW.manual = []; add(e); try { kb.setPointerCapture(e.pointerId); } catch (err) {} e.preventDefault(); });
+  kb.addEventListener('pointermove', (e) => { if (SW.manual) add(e); });
+  const fin = (e) => { if (!SW.manual) return; const pts = SW.manual; SW.manual = null; if (pts.length >= 2) swDecode(pts, 'manual'); };
+  kb.addEventListener('pointerup', fin); kb.addEventListener('pointercancel', fin);
+})();
+$('sExit').onclick = () => setMode('free');
+$('sDel').onclick = () => swipeDelete('manual');
+$('sSpeak').onclick = () => { const t = currentText(); if (t) speak(t); };
+$('sCal').onclick = openCalib;
 
 GROUPS.forEach((g) => { $('l-' + g.dir).textContent = g.letters.toUpperCase().split('').join(' '); });
 for (const d of ['left', 'up', 'right', 'down']) $('t-' + d).addEventListener('click', () => handleGesture(d, 'manual'));
@@ -1490,6 +1676,7 @@ $('cCancel').onclick = () => {
 $('btnPause').onclick = () => { S.paused = !S.paused; $('btnPause').textContent = S.paused ? 'Reanudar' : 'Pausa'; G.armed = false; };
 $('modeFree').onclick = () => setMode('free');
 $('modeCopy').onclick = () => setMode('copy');
+$('modeSwipe').onclick = () => setMode('swipe');
 $('btnFinish').onclick = finishSession;
 $('btnClear').onclick = () => { if (S.mode === 'copy') nextTarget(); else resetSession(false); };
 $('btnSpeak').onclick = () => {
@@ -1585,6 +1772,11 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if ($('calib').classList.contains('on')) return;
+  if (S.mode === 'swipe') {
+    if (e.key === 'Escape') setMode('free');
+    else if (e.key === 'Backspace') { e.preventDefault(); swipeDelete('manual'); }
+    return;
+  }
   const k = { ArrowLeft: 'left', ArrowUp: 'up', ArrowRight: 'right', ArrowDown: 'down', Enter: 'accept', ' ': 'accept', Backspace: 'delete' }[e.key];
   if (!k) return;
   if (tag === 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) return;   // no interferir con botones enfocados
