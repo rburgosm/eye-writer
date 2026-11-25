@@ -15,6 +15,8 @@ Ejemplo: «hola» = ↑ ↑ ↑ ← y parpadeo largo. Las tildes y la ñ las res
 
 **Zoom a los ojos.** La cámara se abre a 1280×720 y, en cuanto localiza la cara, recorta un cuadrado centrado en los ojos y lo amplía (≈×1,5–2) antes de pasarlo a MediaPipe, así el iris tiene más píxeles. Si pierde la cara vuelve al fotograma entero. Se puede desactivar en Ajustes.
 
+**Posturas.** Sentado, tumbado boca arriba o de lado, la cámara ve la cara desde ángulos muy distintos. Por eso se guarda **una calibración por postura** (selector «Postura»). Cada calibración recuerda cómo veía la cámara la cara (inclinación, giro, cabeceo, distancia y orientación de la pantalla) y, si cambias de postura, la app pasa sola a la calibración más parecida (con un doble pitido); si ninguna se parece, el indicador dice «Postura distinta: recalibra». El giro de la cabeza y los ojos se miden en los ejes de la propia cara, así que tumbado de lado (cara girada 90°) funciona igual. El modelo de calibración es 2D completo: si la cabeza está de lado y el móvil derecho, aprende que «izquierda de la pantalla» es un movimiento vertical del ojo.
+
 Ficheros: `index.html` (toda la app), `palabras.js` (15 000 palabras ordenadas por frecuencia, de *wordfreq* 3.1.1, CC BY-SA 4.0) y `sw.js` (caché para usarla sin red una vez cargada).
 
 ## Cómo probarlo desde el móvil, sin ordenador

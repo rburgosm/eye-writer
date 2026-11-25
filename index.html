@@ -96,16 +96,17 @@ label.chk input { width: 22px; height: 22px; }
 #dbgText { font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .result { border: 2px solid var(--ok); }
 /* Calibración a pantalla completa */
-#calib { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: none; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+#calib { position: fixed; inset: 0; background: var(--bg); z-index: 50; display: none; flex-direction: column; align-items: center; justify-content: safe center; padding: 16px; text-align: center; overflow-y: auto; }
 #calib.on { display: flex; }
-#calib .big { font-size: 40px; font-weight: 800; line-height: 1.15; }
-#calib .sub { font-size: 20px; color: var(--muted); margin: 12px 0; max-width: 30em; }
-#calib .arrowbig { font-size: 110px; line-height: 1; color: var(--accent); }
+#calib .big { font-size: 32px; font-weight: 800; line-height: 1.15; }
+#calib .sub { font-size: 17px; color: var(--muted); margin: 10px 0; max-width: 30em; }
+#calib .arrowbig { font-size: 64px; line-height: 1; color: var(--accent); }
 #calib .bar { width: 80%; max-width: 360px; height: 12px; background: var(--soft); border-radius: 6px; overflow: hidden; margin: 14px 0; }
 #calib .bar > div { height: 100%; width: 0; background: var(--accent); }
 #calib button { min-width: 160px; margin: 6px; }
 #calib .panel { display: flex; flex-direction: column; align-items: center; }
 #calib.points .panel { display: none; }
+#calib.test #cPostRow { display: none; }
 #cEyes { width: min(88vw, 360px); height: auto; aspect-ratio: 3 / 1; border-radius: 10px; background: #000; display: block; margin: 0 auto 10px; }
 #cCount { position: absolute; left: 0; right: 0; top: 34%; font-size: 18px; color: var(--muted); display: none; }
 #calib.points #cCount { display: block; }
@@ -122,6 +123,9 @@ label.chk input { width: 22px; height: 22px; }
 #eU { left: 0; right: 0; top: 0; height: 10px; } #eD { left: 0; right: 0; bottom: 0; height: 10px; }
 #closedBadge { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 6px 14px; font-weight: 700; display: none; }
 .muted { color: var(--muted); font-size: 14px; }
+label.postura { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 15px; color: var(--muted); margin: 4px 0; }
+label.postura select { flex: 1; font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; min-height: 44px; }
+#calib label.postura { width: min(88vw, 360px); font-size: 17px; }
 .kbd { font-family: ui-monospace, monospace; background: var(--soft); border-radius: 4px; padding: 0 4px; }
 </style>
 </head>
@@ -138,6 +142,7 @@ label.chk input { width: 22px; height: 22px; }
     <button id="btnCalib">Calibrar</button>
     <button id="btnPause">Pausa</button>
   </div>
+  <label class="postura">Postura <select id="selPost"></select></label>
   <div id="msg" class="msg" hidden></div>
 
   <div class="seg" role="tablist">
@@ -205,9 +210,10 @@ label.chk input { width: 22px; height: 22px; }
     <label class="chk"><input type="checkbox" id="sHead"> Compensar giro de cabeza (se aplica al recalibrar)</label>
     <label class="chk"><input type="checkbox" id="sDrift"> Corregir deriva lenta del centro</label>
     <label class="chk"><input type="checkbox" id="sZoom"> Zoom digital a la zona de los ojos</label>
+    <label class="chk"><input type="checkbox" id="sAuto"> Cambiar de postura automáticamente (según cómo ve la cámara tu cara)</label>
     <label class="chk"><input type="checkbox" id="sSound"> Pitidos de confirmación</label>
     <label class="chk"><input type="checkbox" id="sVoice"> Voz guía en la calibración</label>
-    <div class="row"><button id="btnResetCal">Borrar calibración</button><button id="btnResetSet">Ajustes por defecto</button></div>
+    <div class="row"><button id="btnResetCal">Borrar calibración de esta postura</button><button id="btnResetSet">Ajustes por defecto</button></div>
   </details>
 
   <details id="histBox">
@@ -236,6 +242,7 @@ label.chk input { width: 22px; height: 22px; }
   <div id="cCount"></div>
   <div class="panel">
     <canvas id="cEyes" width="360" height="120"></canvas>
+    <label class="postura" id="cPostRow">Calibrar para <select id="cPost"></select></label>
     <div class="arrowbig" id="cArrow"></div>
     <div class="big" id="cTitle">Calibración</div>
     <div class="sub" id="cSub"></div>
@@ -267,8 +274,10 @@ const FRASES = [
   'mañana es un buen día', 'no puedo dormir bien', 'quiero salir a la calle', 'pon la radio más alta',
   'dónde están mis gafas', 'te quiero mucho', 'la comida está muy buena', 'quiero hablar con el médico',
 ];
-const DEF_SETTINGS = { thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true };
-const LS = { cal: 'eyetype.calib.v2', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
+const DEF_SETTINGS = { thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true, auto: true };
+// Una calibración por postura: la cámara ve la cara desde ángulos muy distintos sentado, tumbado boca arriba o de lado.
+const POSTURAS = { sentado: 'Sentado', arriba: 'Tumbado boca arriba', lado: 'Tumbado de lado', otra: 'Otra postura' };
+const LS = { cal: 'eyetype.calib.v3', calOld: 'eyetype.calib.v2', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
 
 /* ============================ Almacenamiento ============================ */
 function lsGet(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
@@ -276,7 +285,15 @@ function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch
 function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
 let settings = Object.assign({}, DEF_SETTINGS, lsGet(LS.set, {}));
-let calib = lsGet(LS.cal, null);
+let perfiles = lsGet(LS.cal, null);
+if (!perfiles || typeof perfiles !== 'object' || !perfiles.lista) {
+  perfiles = { activa: 'sentado', lista: {} };
+  const viejo = lsGet(LS.calOld, null);
+  if (viejo && viejo.wx) { perfiles.lista.otra = viejo; perfiles.activa = 'otra'; }
+}
+if (!POSTURAS[perfiles.activa]) perfiles.activa = 'sentado';
+let calib = perfiles.lista[perfiles.activa] || null;
+function savePerfiles() { lsSet(LS.cal, perfiles); }
 let history = lsGet(LS.hist, []);
 if (!Array.isArray(history)) history = [];
 
@@ -433,7 +450,7 @@ function statsText() {
     'Borrados: ' + st.borrados + ' · gestos: ' + st.gestos + ' · gestos/palabra: ' + st.gestosPorPalabra + (st.error !== null ? ' · error: ' + st.error + ' %' : ''),
     'Texto: «' + currentText() + '»' + (S.target ? ' · objetivo: «' + S.target + '»' : ''),
     'Ajustes: umbral ' + settings.thr + ' %, permanencia ' + settings.dwell + ' ms, suavizado ' + settings.smooth + ' %, cabeza ' + (settings.head ? 'sí' : 'no') + ', zoom ' + (settings.zoom ? 'sí' : 'no') +
-      (calib ? ' · calibración ' + calib.calidad + ', error ' + Math.round(calib.err * 100) + ' %, temblor ±' + Math.round(calib.ruido * 100) + ' %' : ''),
+      (calib ? ' · postura ' + POSTURAS[perfiles.activa] + ', calibración ' + calib.calidad + ', error ' + Math.round(calib.err * 100) + ' %, temblor ±' + Math.round(calib.ruido * 100) + ' %' : ''),
   ];
   const h = histSummary();
   if (h) lines.push('Historial: ' + h);
@@ -658,11 +675,13 @@ function updateRoi(toV) {
   const a = toV(33), b = toV(263), c = toV(133), d = toV(362);
   const cx0 = (a.x + b.x + c.x + d.x) / 4, cy0 = (a.y + b.y + c.y + d.y) / 4;
   const D = Math.hypot(b.x - a.x, b.y - a.y);           // distancia entre esquinas externas de los ojos
-  G.eyeBox = { cx: cx0, cy: cy0, D };
+  const roll = Math.atan2(b.y - a.y, b.x - a.x);         // inclinación de la cara en la imagen (tumbado de lado ≈ ±90°)
+  G.eyeBox = { cx: cx0, cy: cy0, D, roll };
   G.eyePts = [33, 133, 362, 263, 159, 145, 386, 374, 468, 473].map((i) => Object.assign({ i }, toV(i)));
   if (!settings.zoom) { G.roi = null; return; }
   const s = Math.round(Math.max(160, Math.min(2.8 * D, VW, VH)));   // la cara entera debe caber para que MediaPipe no la pierda
-  const cx = cx0, cy = cy0 + 0.3 * D;
+  // Centro del recorte un poco hacia la barbilla, siguiendo la orientación de la cara (no la de la imagen).
+  const cx = cx0 - 0.3 * D * Math.sin(roll), cy = cy0 + 0.3 * D * Math.cos(roll);
   const r = G.roi;
   if (r) {
     const dc = Math.hypot(cx - (r.x + r.s / 2), cy - (r.y + r.s / 2));
@@ -680,13 +699,13 @@ function drawEyes(cv) {
     x.fillText(G.on ? 'Buscando los ojos…' : 'Cámara apagada', W / 2, H / 2 + 5); x.textAlign = 'start';
     return;
   }
-  const e = G.eyeBox, sw = 1.5 * e.D, sh = sw * H / W, sx = e.cx - sw / 2, sy = e.cy - sh / 2;
-  x.save(); x.translate(W, 0); x.scale(-1, 1);
-  try { x.drawImage(video, sx, sy, sw, sh, 0, 0, W, H); } catch (err) {}
+  // Se endereza la imagen según la inclinación de la cara: los ojos salen siempre horizontales, aunque estés tumbado de lado.
+  const e = G.eyeBox, k = W / (1.5 * e.D);
+  x.save(); x.translate(W / 2, H / 2); x.scale(-k, k); x.rotate(-e.roll); x.translate(-e.cx, -e.cy);
+  try { x.drawImage(video, 0, 0); } catch (err) {}
   for (const p of G.eyePts || []) {
-    const px = (p.x - sx) / sw * W, py = (p.y - sy) / sh * H;
     x.fillStyle = p.i >= 468 ? (G.closedNow ? '#ef4444' : '#22d3ee') : '#facc15';
-    x.beginPath(); x.arc(px, py, p.i >= 468 ? 4 : 2, 0, 7); x.fill();
+    x.beginPath(); x.arc(p.x, p.y, (p.i >= 468 ? 4 : 2) / k, 0, 7); x.fill();
   }
   x.restore();
 }
@@ -705,10 +724,15 @@ function features(lm, W, H) {
     };
   }
   const r = eye(33, 133, 468, 159, 145), l = eye(362, 263, 473, 386, 374);
+  // Ejes de la propia cara (no de la imagen): u = de ojo a ojo, v = hacia la barbilla. Así el giro y la inclinación
+  // de la cabeza se miden igual sentado que tumbado de lado o con el móvil en ángulo.
+  const o1 = P(33), o2 = P(263), uL = Math.hypot(o2.x - o1.x, o2.y - o1.y) || 1;
+  const u = { x: (o2.x - o1.x) / uL, y: (o2.y - o1.y) / uL }, v = { x: -u.y, y: u.x };
   const c1 = P(234), c2 = P(454), f = P(10), ch = P(152);
-  const yaw = Math.atan2(c2.z - c1.z, c2.x - c1.x);     // positivo: la cara gira hacia la derecha de la imagen
-  const pitch = Math.atan2(ch.z - f.z, ch.y - f.y);     // positivo: cabeza inclinada hacia abajo
-  return { ex: 2.5 * ((r.h + l.h) / 2 - 0.5), ey: 2.5 * (r.v + l.v) / 2, yaw, pitch, earR: r.ear, earL: l.ear, ear: (r.ear + l.ear) / 2 };
+  const yaw = Math.atan2(c2.z - c1.z, (c2.x - c1.x) * u.x + (c2.y - c1.y) * u.y);   // positivo: la cara gira hacia la derecha de la imagen
+  const pitch = Math.atan2(ch.z - f.z, (ch.x - f.x) * v.x + (ch.y - f.y) * v.y);    // positivo: barbilla hacia la cámara
+  const roll = Math.atan2(u.y, u.x);
+  return { ex: 2.5 * ((r.h + l.h) / 2 - 0.5), ey: 2.5 * (r.v + l.v) / 2, yaw, pitch, roll, earR: r.ear, earL: l.ear, ear: (r.ear + l.ear) / 2 };
 }
 function gazeOf(f, head) {
   const k = (head === undefined ? settings.head : head) ? 1 : 0;
@@ -733,6 +757,61 @@ function closedThreshold() {
 }
 function calibOpen() { return $('calib').classList.contains('on'); }
 
+/* ---- Posturas: elegir la calibración que corresponde a cómo ve ahora la cámara la cara ---- */
+function screenOrient() {
+  const t = (screen.orientation && screen.orientation.type) || '';
+  return t ? (t.startsWith('landscape') ? 'h' : 'v') : (innerWidth > innerHeight ? 'h' : 'v');
+}
+function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
+// Distancia entre dos poses (≈ 1 = claramente distinta).
+function poseDist(p, q) {
+  if (!p || !q) return Infinity;
+  const r = angDiff(p.roll, q.roll) / 0.35, y = (p.yaw - q.yaw) / 0.3, pi = (p.pitch - q.pitch) / 0.3;
+  const sz = Math.log((p.size || 1e-3) / (q.size || 1e-3)) / 0.35;
+  return Math.sqrt(r * r + y * y + pi * pi + sz * sz) + (p.orient !== q.orient ? 5 : 0);
+}
+function renderPosturas() {
+  for (const id of ['selPost', 'cPost']) {
+    $(id).innerHTML = Object.entries(POSTURAS).map(([k, n]) => '<option value="' + k + '"' + (k === perfiles.activa ? ' selected' : '') + '>' + n + (perfiles.lista[k] ? ' · calibrada' : ' · sin calibrar') + '</option>').join('');
+  }
+}
+function setPostura(k, origen) {
+  if (!POSTURAS[k]) return;
+  perfiles.activa = k; savePerfiles();
+  calib = perfiles.lista[k] || null;
+  G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = []; G.armed = false; G.dir = null; G.autoCount = 0;
+  setDwellProgress(null, 0);
+  renderPosturas();
+  if (origen === 'auto') {
+    beep(600, 0.06); setTimeout(() => beep(800, 0.06), 90);
+    setMsg('Cambio automático a la calibración «' + POSTURAS[k] + '».');
+    if (settings.voice) speak(POSTURAS[k]);
+  } else if (!calibOpen()) {
+    setMsg(calib ? 'Usando la calibración «' + POSTURAS[k] + '».' : 'La postura «' + POSTURAS[k] + '» no está calibrada: pulsa «Calibrar» en esa postura.');
+  }
+}
+// Pose actual suavizada y comprobación periódica de si conviene cambiar de calibración.
+function trackPose(f, t) {
+  const VW = video.videoWidth || 640, VH = video.videoHeight || 480;
+  const cur = { roll: f.roll, yaw: f.yaw, pitch: f.pitch, size: G.eyeBox ? G.eyeBox.D / Math.max(VW, VH) : 0.1, orient: screenOrient() };
+  if (!G.pose || G.pose.orient !== cur.orient) G.pose = cur;
+  else {
+    const a = 0.08;
+    G.pose = { roll: G.pose.roll + a * angDiff(cur.roll, G.pose.roll), yaw: G.pose.yaw + a * (cur.yaw - G.pose.yaw), pitch: G.pose.pitch + a * (cur.pitch - G.pose.pitch),
+      size: G.pose.size + a * (cur.size - G.pose.size), orient: cur.orient };
+  }
+  if (t - (G.poseT || 0) < 500) return;
+  G.poseT = t;
+  G.poseOff = calib && calib.pose ? poseDist(G.pose, calib.pose) : null;
+  if (!settings.auto || calibOpen()) { G.autoCount = 0; return; }
+  let best = null, bd = Infinity;
+  for (const [k, pr] of Object.entries(perfiles.lista)) { const d = poseDist(G.pose, pr.pose); if (d < bd) { bd = d; best = k; } }
+  const dAct = G.poseOff === null ? Infinity : G.poseOff;
+  if (best && best !== perfiles.activa && dAct > 1.2 && bd < 0.6 * dAct && bd < 2.5) {
+    if (++G.autoCount >= 4) setPostura(best, 'auto');     // 2 s seguidos con la otra postura claramente más parecida
+  } else G.autoCount = 0;
+}
+
 function onResults(res) {
   const t = now();
   const dt = G.lastT ? Math.min(0.2, (t - G.lastT) / 1000) : 0; G.lastT = t;
@@ -753,13 +832,17 @@ function onResults(res) {
   if (calibOpen()) drawEyes($('cEyes'));
   const W = res.image.width || R.w, H = res.image.height || R.h;
   const f = features(lm, W, H);
+  f.size = G.eyeBox ? G.eyeBox.D / Math.max(video.videoWidth || 640, video.videoHeight || 480) : 0.1;
   G.raw = f;
+  trackPose(f, t);
   // --- ojos cerrados (ambos) ---
   const thr = closedThreshold();
   const closed = f.earR < thr && f.earL < thr;
   G.closedNow = closed;
   if (G.collecting) { if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
-  setStatus((S.paused ? 'En pausa · ' : (calib ? 'Siguiendo · ' : 'Sin calibrar · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''), S.paused ? 'warn' : (calib ? 'ok' : 'warn'));
+  const lejos = calib && G.poseOff !== null && G.poseOff > 2;
+  setStatus((S.paused ? 'En pausa · ' : (!calib ? 'Sin calibrar · ' : lejos ? 'Postura distinta: recalibra · ' : 'Siguiendo · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''),
+    S.paused || !calib || lejos ? 'warn' : 'ok');
   handleBlink(closed, t);
   // --- suavizado y dirección ---
   if (closed || G.closing) { G.sx = null; G.sy = null; G.buf = []; G.dir = null; setDwellProgress(null, 0); drawDebug(); return; }
@@ -869,7 +952,9 @@ function drawDebug() {
     lines.push('ojo x ' + f.ex.toFixed(3) + '  y ' + f.ey.toFixed(3) + '  · cabeza yaw ' + (f.yaw * 57.3).toFixed(1) + '°  pitch ' + (f.pitch * 57.3).toFixed(1) + '°');
     lines.push('EAR der ' + f.earR.toFixed(3) + '  izq ' + f.earL.toFixed(3) + '  umbral cerrado ' + closedThreshold().toFixed(3) + (G.closedNow ? '  CERRADOS' : ''));
   }
-  if (calib) lines.push('calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad + '  error ' + Math.round(calib.err * 100) + ' %  ruido ±' + Math.round(calib.ruido * 100) + ' %');
+  if (G.pose) lines.push('pose  inclinación ' + (G.pose.roll * 57.3).toFixed(0) + '°  giro ' + (G.pose.yaw * 57.3).toFixed(0) + '°  cabeceo ' + (G.pose.pitch * 57.3).toFixed(0) + '°  tamaño ' + G.pose.size.toFixed(3) +
+    '  pantalla ' + G.pose.orient + (G.poseOff !== null && G.poseOff !== undefined ? '  · distancia a la calibración ' + G.poseOff.toFixed(2) : ''));
+  if (calib) lines.push('postura ' + POSTURAS[perfiles.activa] + ' · calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad + '  error ' + Math.round(calib.err * 100) + ' %  ruido ±' + Math.round(calib.ruido * 100) + ' %');
   else lines.push('sin calibración');
   $('dbgText').textContent = lines.join('\n');
 }
@@ -925,9 +1010,10 @@ function openCalib() {
   calMode('intro');
   $('calib').classList.add('on');
   $('cStart').style.display = ''; $('cStart').textContent = 'Empezar'; $('cCancel').textContent = 'Cancelar';
-  calShow('👁', 'Calibración fina', 'Sujeta el móvil como para escribir, con la cara bien iluminada. Arriba deberías ver tus ojos ampliados con el iris marcado. ' +
-    'Aparecerá un punto en el centro, en los bordes y en las esquinas de la pantalla: síguelo solo con los ojos, sin mover la cabeza, y míralo fijo hasta que el círculo se cierre. ' +
-    'No hace falta mirar fuera del móvil. Son ' + CAL_POINTS.length + ' puntos (~30 s).', 0);
+  calShow('👁', 'Calibración fina', 'Ponte en la postura en la que vas a escribir y elígela arriba: se guarda una calibración por postura. ' +
+    'Comprueba que se ven tus ojos con el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~30 s): ' +
+    'síguelo solo con los ojos, sin mover la cabeza, hasta que el círculo se cierre. Tumbado de lado: bloquea el giro de pantalla.', 0);
+  renderPosturas();
   if (!G.on) startCamera();
 }
 async function runCalib() {
@@ -964,7 +1050,7 @@ async function runCalib() {
       return;
     }
     const med = {};
-    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL']) med[k] = median(use.map((s) => s[k]));
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL', 'size']) med[k] = median(use.map((s) => s[k]));
     pts.push({ pt, med, samples: use });
   }
   // --- Ajuste del modelo (rasgos → pantalla) ---
@@ -988,8 +1074,11 @@ async function runCalib() {
   for (const p of pts) { const k = p.pt.k.replace('2', ''); if (!['left', 'right', 'up', 'down'].includes(k)) continue; const m = mapW(p.med); dirErr[k] = Math.max(dirErr[k] || 0, Math.hypot(m.x - p.pt.x, m.y - p.pt.y)); }
   const calidad = err > 0.45 ? 'mala' : (err < 0.2 && ruido < 0.12) ? 'buena' : (err < 0.3 && ruido < 0.2) ? 'aceptable' : 'baja';
   const byKey = (k) => pts.find((p) => p.pt.k === k).med;
-  calib = { wx, wy, head, center, down: byKey('down'), fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr };
-  lsSet(LS.cal, calib);
+  const cs0 = pts[0].samples.concat(pts[pts.length - 1].samples);
+  const pose = { roll: median(cs0.map((s) => s.roll)), yaw: median(cs0.map((s) => s.yaw)), pitch: median(cs0.map((s) => s.pitch)), size: median(cs0.map((s) => s.size)), orient: screenOrient() };
+  const postura = $('cPost').value in POSTURAS ? $('cPost').value : perfiles.activa;
+  calib = { wx, wy, head, center, down: byKey('down'), pose, postura, fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr };
+  perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
   G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = [];
   G.armed = false;
   // Umbral recomendado: lejos del ruido pero sin exigir llegar al borde.
@@ -1000,7 +1089,7 @@ async function runCalib() {
   if (calidad === 'mala' || calidad === 'baja') sub += 'La dirección más floja es «' + nombres[peor[0]] + '». Repite con más luz y sin mover la cabeza. ';
   sub += 'Umbral recomendado: ' + recom + ' % (ahora ' + settings.thr + ' %). Prueba: el círculo rojo sigue tu mirada; mira cada borde y se iluminará.';
   calMode('test');
-  calShow('✓', 'Calibración guardada', sub, 1);
+  calShow('✓', 'Guardada: ' + POSTURAS[postura], sub, 1);
   if (settings.voice) speak('Calibración terminada. Calidad ' + calidad);
   $('cStart').style.display = ''; $('cStart').textContent = 'Repetir';
   $('cCancel').textContent = 'Cerrar';
@@ -1033,7 +1122,7 @@ function bindSettings() {
     const el = $(id); el.value = settings[key]; $(out).textContent = fmt(settings[key]);
     el.oninput = () => { settings[key] = +el.value; $(out).textContent = fmt(settings[key]); lsSet(LS.set, settings); };
   }
-  for (const [id, key] of [['sHead', 'head'], ['sSound', 'sound'], ['sVoice', 'voice'], ['sDrift', 'drift'], ['sZoom', 'zoom']]) {
+  for (const [id, key] of [['sHead', 'head'], ['sSound', 'sound'], ['sVoice', 'voice'], ['sDrift', 'drift'], ['sZoom', 'zoom'], ['sAuto', 'auto']]) {
     const el = $(id); el.checked = !!settings[key];
     el.onchange = () => { settings[key] = el.checked; lsSet(LS.set, settings); };
   }
@@ -1076,7 +1165,12 @@ $('btnCopyStats').onclick = async () => {
   }
   setMsg(ok ? 'Estadísticas copiadas al portapapeles.' : 'No se pudo copiar. Texto:\n' + txt, !ok);
 };
-$('btnResetCal').onclick = () => { calib = null; G.bias = { x: 0, y: 0 }; lsDel(LS.cal); setMsg('Calibración borrada.'); };
+$('btnResetCal').onclick = () => {
+  delete perfiles.lista[perfiles.activa]; savePerfiles(); calib = null; G.bias = { x: 0, y: 0 };
+  renderPosturas(); setMsg('Calibración de «' + POSTURAS[perfiles.activa] + '» borrada.');
+};
+$('selPost').onchange = () => setPostura($('selPost').value, 'manual');
+$('cPost').onchange = () => setPostura($('cPost').value, 'manual');
 $('btnResetSet').onclick = () => { settings = Object.assign({}, DEF_SETTINGS); lsSet(LS.set, settings); bindSettings(); };
 $('btnClearHist').onclick = () => { if (confirm('¿Borrar todo el historial?')) { history = []; lsSet(LS.hist, history); renderHistory(); } };
 $('histBox').addEventListener('toggle', renderHistory);
@@ -1097,6 +1191,7 @@ document.addEventListener('keydown', (e) => {
 if (!DICT.words.length) setMsg('No se cargó el diccionario (palabras.js).', true);
 else if (!calib) setMsg('Modo práctica listo (flechas o toca los recuadros). Para usar la mirada: «Activar cámara» y después «Calibrar».');
 bindSettings();
+renderPosturas();
 render();
 renderHistory();
 window.__eyetype = { S, DICT, candidatesFor, codeOf, handleGesture, computeStats, FRASES, GROUPS };
