@@ -92,7 +92,7 @@ label.chk input { width: 22px; height: 22px; }
 .hist th, .hist td { border-bottom: 1px solid var(--line); padding: 4px 2px; text-align: right; }
 .hist th:first-child, .hist td:first-child { text-align: left; }
 .histwrap { overflow-x: auto; }
-#dbgCanvas, #dbgVideo { width: 100%; max-width: 320px; display: block; margin: 6px auto; border-radius: 8px; background: #000; }
+#dbgCanvas, #dbgVideo, #dbgEyes { width: 100%; max-width: 320px; display: block; margin: 6px auto; border-radius: 8px; background: #000; }
 #dbgText { font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .result { border: 2px solid var(--ok); }
 /* Calibración a pantalla completa */
@@ -104,6 +104,22 @@ label.chk input { width: 22px; height: 22px; }
 #calib .bar { width: 80%; max-width: 360px; height: 12px; background: var(--soft); border-radius: 6px; overflow: hidden; margin: 14px 0; }
 #calib .bar > div { height: 100%; width: 0; background: var(--accent); }
 #calib button { min-width: 160px; margin: 6px; }
+#calib .panel { display: flex; flex-direction: column; align-items: center; }
+#calib.points .panel { display: none; }
+#cEyes { width: min(88vw, 360px); height: auto; aspect-ratio: 3 / 1; border-radius: 10px; background: #000; display: block; margin: 0 auto 10px; }
+#cCount { position: absolute; left: 0; right: 0; top: 34%; font-size: 18px; color: var(--muted); display: none; }
+#calib.points #cCount { display: block; }
+#cDot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--accent); display: none; transition: left .35s ease, top .35s ease; }
+#calib.points #cDot { display: block; }
+#cDot::after { content: ""; position: absolute; inset: -14px; border: 3px solid var(--accent); border-radius: 50%; transform: scale(var(--ring, 1.6)); transition: transform var(--ringT, .9s) linear; }
+#cDot::before { content: ""; position: absolute; left: 8px; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
+#cGaze { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 3px solid var(--bad); display: none; pointer-events: none; }
+#calib.test #cGaze { display: block; }
+.edge { position: absolute; background: var(--accent); opacity: 0; transition: opacity .15s; pointer-events: none; }
+#calib.test .edge { opacity: .18; }
+#calib .edge.hot { opacity: .8; }
+#eL { left: 0; top: 0; bottom: 0; width: 10px; } #eR { right: 0; top: 0; bottom: 0; width: 10px; }
+#eU { left: 0; right: 0; top: 0; height: 10px; } #eD { left: 0; right: 0; bottom: 0; height: 10px; }
 #closedBadge { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 6px 14px; font-weight: 700; display: none; }
 .muted { color: var(--muted); font-size: 14px; }
 .kbd { font-family: ui-monospace, monospace; background: var(--soft); border-radius: 4px; padding: 0 4px; }
@@ -158,7 +174,7 @@ label.chk input { width: 22px; height: 22px; }
   <details id="helpBox">
     <summary>Cómo se escribe</summary>
     <p>Cada letra pertenece a uno de 3 grupos. Para cada letra de la palabra, mira hacia la dirección de su grupo
-    (fuera del móvil, gesto amplio) y vuelve al centro. El diccionario adivina la palabra; las tildes y la ñ se resuelven solas.</p>
+    (al borde de la pantalla: un movimiento corto, sin salir del móvil) y vuelve al centro. El diccionario adivina la palabra; las tildes y la ñ se resuelven solas.</p>
     <ul>
       <li><b>← izquierda</b>, <b>↑ arriba</b>, <b>→ derecha</b>: grupo de letras.</li>
       <li><b>↓ abajo</b>: siguiente candidato.</li>
@@ -173,7 +189,7 @@ label.chk input { width: 22px; height: 22px; }
   <details id="setBox">
     <summary>Ajustes</summary>
     <label class="set">Umbral de gesto: <b id="vThr"></b> del recorrido calibrado
-      <input type="range" id="sThr" min="40" max="90" step="5"></label>
+      <input type="range" id="sThr" min="25" max="100" step="5"></label>
     <label class="set">Tiempo de permanencia: <b id="vDwell"></b>
       <input type="range" id="sDwell" min="300" max="1000" step="50"></label>
     <label class="set">Volver al centro por debajo de: <b id="vRet"></b>
@@ -184,7 +200,11 @@ label.chk input { width: 22px; height: 22px; }
       <input type="range" id="sClose" min="1000" max="3000" step="100"></label>
     <label class="set">Sensibilidad de ojo cerrado: <b id="vEar"></b> de la apertura normal
       <input type="range" id="sEar" min="35" max="75" step="5"></label>
-    <label class="chk"><input type="checkbox" id="sHead"> Compensar giro de cabeza</label>
+    <label class="set">Suavizado de la mirada: <b id="vSmooth"></b>
+      <input type="range" id="sSmooth" min="0" max="85" step="5"></label>
+    <label class="chk"><input type="checkbox" id="sHead"> Compensar giro de cabeza (se aplica al recalibrar)</label>
+    <label class="chk"><input type="checkbox" id="sDrift"> Corregir deriva lenta del centro</label>
+    <label class="chk"><input type="checkbox" id="sZoom"> Zoom digital a la zona de los ojos</label>
     <label class="chk"><input type="checkbox" id="sSound"> Pitidos de confirmación</label>
     <label class="chk"><input type="checkbox" id="sVoice"> Voz guía en la calibración</label>
     <div class="row"><button id="btnResetCal">Borrar calibración</button><button id="btnResetSet">Ajustes por defecto</button></div>
@@ -199,7 +219,8 @@ label.chk input { width: 22px; height: 22px; }
 
   <details id="dbgBox">
     <summary>Depuración</summary>
-    <canvas id="dbgVideo" width="320" height="240"></canvas>
+    <canvas id="dbgVideo" width="320" height="320"></canvas>
+    <canvas id="dbgEyes" width="320" height="107"></canvas>
     <canvas id="dbgCanvas" width="320" height="320"></canvas>
     <div id="dbgText">Sin datos de cámara.</div>
   </details>
@@ -209,13 +230,20 @@ label.chk input { width: 22px; height: 22px; }
 <div id="closedBadge"></div>
 
 <div id="calib" role="dialog" aria-modal="true">
-  <div class="arrowbig" id="cArrow"></div>
-  <div class="big" id="cTitle">Calibración</div>
-  <div class="sub" id="cSub"></div>
-  <div class="bar"><div id="cBar"></div></div>
-  <div>
-    <button id="cStart" class="primary">Empezar</button>
-    <button id="cCancel">Cancelar</button>
+  <div class="edge" id="eL"></div><div class="edge" id="eR"></div><div class="edge" id="eU"></div><div class="edge" id="eD"></div>
+  <div id="cDot"></div>
+  <div id="cGaze"></div>
+  <div id="cCount"></div>
+  <div class="panel">
+    <canvas id="cEyes" width="360" height="120"></canvas>
+    <div class="arrowbig" id="cArrow"></div>
+    <div class="big" id="cTitle">Calibración</div>
+    <div class="sub" id="cSub"></div>
+    <div class="bar"><div id="cBar"></div></div>
+    <div>
+      <button id="cStart" class="primary">Empezar</button>
+      <button id="cCancel">Cancelar</button>
+    </div>
   </div>
 </div>
 
@@ -239,8 +267,8 @@ const FRASES = [
   'mañana es un buen día', 'no puedo dormir bien', 'quiero salir a la calle', 'pon la radio más alta',
   'dónde están mis gafas', 'te quiero mucho', 'la comida está muy buena', 'quiero hablar con el médico',
 ];
-const DEF_SETTINGS = { thr: 60, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true };
-const LS = { cal: 'eyetype.calib.v1', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
+const DEF_SETTINGS = { thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true };
+const LS = { cal: 'eyetype.calib.v2', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
 
 /* ============================ Almacenamiento ============================ */
 function lsGet(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch (e) { return def; } }
@@ -404,7 +432,8 @@ function statsText() {
     'Tiempo: ' + fmtTime(st.segundos) + ' · PPM: ' + st.ppm + ' · palabras: ' + st.palabras + ' · caracteres: ' + st.caracteres,
     'Borrados: ' + st.borrados + ' · gestos: ' + st.gestos + ' · gestos/palabra: ' + st.gestosPorPalabra + (st.error !== null ? ' · error: ' + st.error + ' %' : ''),
     'Texto: «' + currentText() + '»' + (S.target ? ' · objetivo: «' + S.target + '»' : ''),
-    'Ajustes: umbral ' + settings.thr + ' %, permanencia ' + settings.dwell + ' ms, cabeza ' + (settings.head ? 'sí' : 'no'),
+    'Ajustes: umbral ' + settings.thr + ' %, permanencia ' + settings.dwell + ' ms, suavizado ' + settings.smooth + ' %, cabeza ' + (settings.head ? 'sí' : 'no') + ', zoom ' + (settings.zoom ? 'sí' : 'no') +
+      (calib ? ' · calibración ' + calib.calidad + ', error ' + Math.round(calib.err * 100) + ' %, temblor ±' + Math.round(calib.ruido * 100) + ' %' : ''),
   ];
   const h = histSummary();
   if (h) lines.push('Historial: ' + h);
@@ -528,11 +557,16 @@ function speak(text, opts) {
 /* ============================ Cámara y MediaPipe ============================ */
 const G = {
   on: false, loading: false, fm: null, stream: null, busy: false, lastFace: 0, fps: 0, frames: 0, fpsT: 0,
-  raw: null, sx: null, sy: null, collecting: null,
+  raw: null, sx: null, sy: null, buf: [], bias: { x: 0, y: 0 }, lastT: 0, collecting: null,
   dir: null, dirStart: 0, armed: false, suppressUntil: 0,
   closing: false, closeStart: 0, openCount: 0, beeped1: false, beeped2: false, closedNow: false,
   fr: null, lastImage: null, lastLm: null,
+  // Zoom digital: recorte cuadrado alrededor de los ojos (coordenadas del vídeo) que se envía ampliado a MediaPipe.
+  roi: null, inRoi: null, roiSkip: 0, lostCount: 0, eyeBox: null, eyePts: null,
 };
+const ROI_SIZE = 512;
+G.cv = document.createElement('canvas'); G.cv.width = G.cv.height = ROI_SIZE;
+G.cvx = G.cv.getContext('2d');
 const video = $('thumb');
 
 function loadScript(src, timeoutMs) {
@@ -556,9 +590,11 @@ async function startCamera() {
     }
     setStatus('Pidiendo cámara…', 'warn');
     try {
-      G.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      // Resolución alta: el zoom digital recorta la zona de los ojos, así que cuantos más píxeles, más detalle del iris.
+      G.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
     } catch (e) {
-      throw new Error('No se pudo abrir la cámara frontal (' + (e && e.name || 'error') + '). Revisa el permiso de cámara del navegador. El modo práctica sigue funcionando.');
+      try { G.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }); }
+      catch (e2) { throw new Error('No se pudo abrir la cámara frontal (' + (e2 && e2.name || 'error') + '). Revisa el permiso de cámara del navegador. El modo práctica sigue funcionando.'); }
     }
     video.srcObject = G.stream; video.style.display = 'block';
     try { await video.play(); } catch (e) {}
@@ -572,7 +608,7 @@ async function startCamera() {
     G.fm.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
     G.fm.onResults(onResults);
     if (typeof G.fm.initialize === 'function') await G.fm.initialize();
-    G.on = true; G.loading = false;
+    G.on = true; G.loading = false; G.roi = null;
     $('btnCam').textContent = 'Apagar cámara';
     setMsg(calib ? '' : 'Cámara lista. Ahora pulsa «Calibrar».');
     setStatus('Buscando cara…', 'warn');
@@ -587,7 +623,7 @@ async function startCamera() {
   }
 }
 function stopCamera() {
-  G.on = false;
+  G.on = false; G.roi = null;
   if (G.stream) { G.stream.getTracks().forEach((t) => t.stop()); G.stream = null; }
   video.srcObject = null; video.style.display = 'none';
   $('btnCam').textContent = 'Activar cámara';
@@ -595,15 +631,64 @@ function stopCamera() {
   setDwellProgress(null, 0);
   $('closedBadge').style.display = 'none';
 }
+// Imagen que se envía a MediaPipe: el fotograma entero o, si ya sabemos dónde están los ojos, un recorte ampliado.
+function prepareInput() {
+  const VW = video.videoWidth, VH = video.videoHeight;
+  if (!settings.zoom || !G.roi || !VW) { G.inRoi = { x: 0, y: 0, w: VW, h: VH, crop: false }; return video; }
+  const r = G.roi;
+  G.cvx.drawImage(video, r.x, r.y, r.s, r.s, 0, 0, ROI_SIZE, ROI_SIZE);
+  G.inRoi = { x: r.x, y: r.y, w: r.s, h: r.s, crop: true };
+  return G.cv;
+}
 async function tick() {
   if (!G.on) return;
   if (!G.busy && video.readyState >= 2) {
     G.busy = true;
-    try { await G.fm.send({ image: video }); }
+    try { await G.fm.send({ image: prepareInput() }); }
     catch (e) { setMsg('Error de MediaPipe: ' + (e && e.message || e) + '. El modo práctica sigue funcionando.', true); stopCamera(); }
     G.busy = false;
   }
   if (G.on) requestAnimationFrame(tick);
+}
+// Recoloca el recorte centrado en los ojos. Solo se mueve si la cara se desplaza o cambia de tamaño de forma apreciable,
+// para no desestabilizar el seguimiento de MediaPipe.
+function updateRoi(toV) {
+  const VW = video.videoWidth, VH = video.videoHeight;
+  if (!VW) return;
+  const a = toV(33), b = toV(263), c = toV(133), d = toV(362);
+  const cx0 = (a.x + b.x + c.x + d.x) / 4, cy0 = (a.y + b.y + c.y + d.y) / 4;
+  const D = Math.hypot(b.x - a.x, b.y - a.y);           // distancia entre esquinas externas de los ojos
+  G.eyeBox = { cx: cx0, cy: cy0, D };
+  G.eyePts = [33, 133, 362, 263, 159, 145, 386, 374, 468, 473].map((i) => Object.assign({ i }, toV(i)));
+  if (!settings.zoom) { G.roi = null; return; }
+  const s = Math.round(Math.max(160, Math.min(2.8 * D, VW, VH)));   // la cara entera debe caber para que MediaPipe no la pierda
+  const cx = cx0, cy = cy0 + 0.3 * D;
+  const r = G.roi;
+  if (r) {
+    const dc = Math.hypot(cx - (r.x + r.s / 2), cy - (r.y + r.s / 2));
+    if (dc < 0.1 * r.s && Math.abs(s / r.s - 1) < 0.15) return;
+  }
+  G.roi = { x: Math.round(Math.min(Math.max(cx - s / 2, 0), VW - s)), y: Math.round(Math.min(Math.max(cy - s / 2, 0), VH - s)), s };
+  G.roiSkip = 2;   // los primeros fotogramas tras mover el recorte pueden traer saltos
+}
+// Vista ampliada de los ojos (para comprobar que se detectan bien).
+function drawEyes(cv) {
+  const x = cv.getContext('2d'), W = cv.width, H = cv.height;
+  x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
+  if (!G.eyeBox || !G.lastLm || !video.videoWidth) {
+    x.fillStyle = '#94a3b8'; x.font = '14px sans-serif'; x.textAlign = 'center';
+    x.fillText(G.on ? 'Buscando los ojos…' : 'Cámara apagada', W / 2, H / 2 + 5); x.textAlign = 'start';
+    return;
+  }
+  const e = G.eyeBox, sw = 1.5 * e.D, sh = sw * H / W, sx = e.cx - sw / 2, sy = e.cy - sh / 2;
+  x.save(); x.translate(W, 0); x.scale(-1, 1);
+  try { x.drawImage(video, sx, sy, sw, sh, 0, 0, W, H); } catch (err) {}
+  for (const p of G.eyePts || []) {
+    const px = (p.x - sx) / sw * W, py = (p.y - sy) / sh * H;
+    x.fillStyle = p.i >= 468 ? (G.closedNow ? '#ef4444' : '#22d3ee') : '#facc15';
+    x.beginPath(); x.arc(px, py, p.i >= 468 ? 4 : 2, 0, 7); x.fill();
+  }
+  x.restore();
 }
 
 // Índices de Face Mesh (con refineLandmarks): iris 468 (ojo derecho de la persona) y 473 (izquierdo).
@@ -625,9 +710,20 @@ function features(lm, W, H) {
   const pitch = Math.atan2(ch.z - f.z, ch.y - f.y);     // positivo: cabeza inclinada hacia abajo
   return { ex: 2.5 * ((r.h + l.h) / 2 - 0.5), ey: 2.5 * (r.v + l.v) / 2, yaw, pitch, earR: r.ear, earL: l.ear, ear: (r.ear + l.ear) / 2 };
 }
-function gazeOf(f) {
-  const k = settings.head ? 1 : 0;
+function gazeOf(f, head) {
+  const k = (head === undefined ? settings.head : head) ? 1 : 0;
   return { x: f.ex + k * f.yaw, y: f.ey + k * f.pitch };
+}
+// Vector de rasgos del modelo: mirada del iris (+ cabeza) y apertura de párpados relativa (ayuda mucho en vertical).
+function featVec(f, head, ear0) {
+  const g = gazeOf(f, head);
+  return [1, g.x, g.y, (f.ear - ear0) / (ear0 || 1)];
+}
+// Mirada en coordenadas de pantalla: -1 = borde izquierdo/superior, +1 = borde derecho/inferior.
+function mapRaw(f) {
+  const v = featVec(f, calib.head, calib.center.ear);
+  const dot = (w) => w.reduce((a, wi, i) => a + wi * v[i], 0);
+  return { x: dot(calib.wx) - G.bias.x, y: dot(calib.wy) - G.bias.y };
 }
 function closedThreshold() {
   const base = calib ? calib.center.ear : 0.28;
@@ -635,54 +731,60 @@ function closedThreshold() {
   if (calib && calib.down) thr = Math.min(thr, calib.down.ear * 0.8);
   return thr;
 }
-// Fracción del recorrido calibrado hacia cada dirección (1 = extremo calibrado).
-function fractions(g) {
-  const c = gazeOf(calib.center);
-  const fr = {};
-  for (const [d, ax] of [['left', 'x'], ['right', 'x'], ['up', 'y'], ['down', 'y']]) {
-    const t = gazeOf(calib[d]);
-    const span = t[ax] - c[ax];
-    fr[d] = Math.abs(span) < 1e-4 ? 0 : Math.max(0, (g[ax] - c[ax]) / span);
-  }
-  return fr;
-}
+function calibOpen() { return $('calib').classList.contains('on'); }
 
 function onResults(res) {
   const t = now();
+  const dt = G.lastT ? Math.min(0.2, (t - G.lastT) / 1000) : 0; G.lastT = t;
   G.frames++;
   if (t - G.fpsT > 1000) { G.fps = Math.round(G.frames * 1000 / (t - G.fpsT)); G.frames = 0; G.fpsT = t; }
   const lm = res.multiFaceLandmarks && res.multiFaceLandmarks[0];
+  const R = G.inRoi || { x: 0, y: 0, w: video.videoWidth || 640, h: video.videoHeight || 480, crop: false };
   G.lastImage = res.image; G.lastLm = lm || null;
   if (!lm || lm.length < 478) {
-    G.raw = null; G.dir = null; setDwellProgress(null, 0);
+    G.raw = null; G.dir = null; G.buf = []; setDwellProgress(null, 0);
+    if (R.crop && ++G.lostCount >= 3) { G.roi = null; G.lostCount = 0; }   // vuelve a buscar la cara en el fotograma entero
     if (t - G.lastFace > 600) setStatus('No veo la cara', 'bad');
-    drawDebug(); return;
+    drawDebug(); if (calibOpen()) drawEyes($('cEyes')); return;
   }
+  G.lostCount = 0;
   G.lastFace = t;
-  const W = res.image.width || video.videoWidth || 640, H = res.image.height || video.videoHeight || 480;
+  updateRoi((i) => ({ x: R.x + lm[i].x * R.w, y: R.y + lm[i].y * R.h }));
+  if (calibOpen()) drawEyes($('cEyes'));
+  const W = res.image.width || R.w, H = res.image.height || R.h;
   const f = features(lm, W, H);
   G.raw = f;
   // --- ojos cerrados (ambos) ---
   const thr = closedThreshold();
   const closed = f.earR < thr && f.earL < thr;
   G.closedNow = closed;
-  if (G.collecting) { G.collecting.push(f); drawDebug(); return; }
-  setStatus((S.paused ? 'En pausa · ' : (calib ? 'Siguiendo · ' : 'Sin calibrar · ')) + G.fps + ' fps', S.paused ? 'warn' : (calib ? 'ok' : 'warn'));
+  if (G.collecting) { if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
+  setStatus((S.paused ? 'En pausa · ' : (calib ? 'Siguiendo · ' : 'Sin calibrar · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''), S.paused ? 'warn' : (calib ? 'ok' : 'warn'));
   handleBlink(closed, t);
   // --- suavizado y dirección ---
-  if (closed || G.closing) { G.sx = null; G.sy = null; G.dir = null; setDwellProgress(null, 0); drawDebug(); return; }
-  const g = gazeOf(f);
-  const a = 0.5;
-  G.sx = G.sx === null ? g.x : G.sx + a * (g.x - G.sx);
-  G.sy = G.sy === null ? g.y : G.sy + a * (g.y - G.sy);
+  if (closed || G.closing) { G.sx = null; G.sy = null; G.buf = []; G.dir = null; setDwellProgress(null, 0); drawDebug(); return; }
+  if (G.roiSkip > 0) { G.roiSkip--; drawDebug(); return; }
   if (!calib) { drawDebug(); return; }
-  const fr = fractions({ x: G.sx, y: G.sy });
+  // Mediana de 5 fotogramas (quita picos) + media exponencial (quita temblor).
+  const m = mapRaw(f);
+  G.buf.push(m); if (G.buf.length > 5) G.buf.shift();
+  const mx = median(G.buf.map((p) => p.x)), my = median(G.buf.map((p) => p.y));
+  const a = 1 - settings.smooth / 100;
+  G.sx = G.sx === null ? mx : G.sx + a * (mx - G.sx);
+  G.sy = G.sy === null ? my : G.sy + a * (my - G.sy);
+  const thrF = settings.thr / 100, retF = settings.ret / 100;
+  // Corrección de deriva: si la mirada está en reposo en la zona central, el centro se reajusta muy despacio (~40 s).
+  if (settings.drift && G.armed && !G.dir && Math.abs(G.sx) < retF && Math.abs(G.sy) < retF) {
+    G.bias.x += dt / 40 * G.sx; G.bias.y += dt / 40 * G.sy;
+  }
+  const fr = { left: Math.max(0, -G.sx), right: Math.max(0, G.sx), up: Math.max(0, -G.sy), down: Math.max(0, G.sy) };
   G.fr = fr;
   let best = null, bv = 0;
   for (const d in fr) if (fr[d] > bv) { bv = fr[d]; best = d; }
-  const thrF = settings.thr / 100, retF = settings.ret / 100;
   if (bv < retF) G.armed = true;
-  if (S.paused || t < G.suppressUntil || !G.armed || bv < thrF) {
+  const testing = calibOpen();
+  if (testing) updateCalibTest(fr, thrF);
+  if ((S.paused && !testing) || t < G.suppressUntil || !G.armed || bv < thrF) {
     G.dir = null; setDwellProgress(null, 0);
   } else {
     if (G.dir !== best) { G.dir = best; G.dirStart = t; }
@@ -690,29 +792,31 @@ function onResults(res) {
     setDwellProgress(best, p);
     if (p >= 1) {
       G.armed = false; G.dir = null; setDwellProgress(null, 0);
-      handleGesture(best, 'mirada');
+      if (testing) { beep(660, 0.05); flashEdge(best); }
+      else handleGesture(best, 'mirada');
     }
   }
   drawDebug();
 }
 function handleBlink(closed, t) {
   const badge = $('closedBadge');
+  const quiet = S.paused || calibOpen();
   if (closed) {
     if (!G.closing) { G.closing = true; G.closeStart = t; G.beeped1 = G.beeped2 = false; }
     G.openCount = 0;
     const dur = t - G.closeStart;
-    if (!S.paused) {
+    if (!quiet) {
       if (!G.beeped1 && dur >= settings.blink) { G.beeped1 = true; beep(440, 0.08); }
       if (!G.beeped2 && dur >= settings.close) { G.beeped2 = true; beep(1200, 0.12); }
     }
-    if (dur >= 200) { badge.style.display = 'block'; badge.textContent = 'Ojos cerrados ' + (dur / 1000).toFixed(1) + ' s → ' + (dur >= settings.close ? 'borrar' : dur >= settings.blink ? 'aceptar' : '…'); }
+    if (dur >= 200 && !calibOpen()) { badge.style.display = 'block'; badge.textContent = 'Ojos cerrados ' + (dur / 1000).toFixed(1) + ' s → ' + (dur >= settings.close ? 'borrar' : dur >= settings.blink ? 'aceptar' : '…'); }
   } else if (G.closing) {
     G.openCount++;
     if (G.openCount >= 2) {             // dos fotogramas abiertos seguidos para cerrar el evento
       const dur = t - G.closeStart;
       G.closing = false; badge.style.display = 'none';
       G.suppressUntil = t + 250; G.armed = false;
-      if (!S.paused) {
+      if (!quiet) {
         if (dur >= settings.close) handleGesture('delete', 'mirada');
         else if (dur >= settings.blink) handleGesture('accept', 'mirada');
       }
@@ -725,16 +829,20 @@ function drawDebug() {
   if (!$('dbgBox').open) return;
   const cv = $('dbgVideo'), cx = cv.getContext('2d');
   if (G.lastImage) {
+    cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height);
+    const iw = G.lastImage.width || cv.width, ih = G.lastImage.height || cv.height;
+    const sc = Math.min(cv.width / iw, cv.height / ih), dw = iw * sc, dh = ih * sc, ox = (cv.width - dw) / 2, oy = (cv.height - dh) / 2;
     cx.save(); cx.translate(cv.width, 0); cx.scale(-1, 1);
-    try { cx.drawImage(G.lastImage, 0, 0, cv.width, cv.height); } catch (e) {}
+    try { cx.drawImage(G.lastImage, ox, oy, dw, dh); } catch (e) {}
     if (G.lastLm) {
       cx.fillStyle = '#22d3ee';
       for (const i of [33, 133, 362, 263, 159, 145, 386, 374, 468, 473]) {
-        const p = G.lastLm[i]; cx.beginPath(); cx.arc(p.x * cv.width, p.y * cv.height, i >= 468 ? 3 : 1.6, 0, 7); cx.fill();
+        const p = G.lastLm[i]; cx.beginPath(); cx.arc(ox + p.x * dw, oy + p.y * dh, i >= 468 ? 3 : 1.6, 0, 7); cx.fill();
       }
     }
     cx.restore();
   }
+  drawEyes($('dbgEyes'));
   const c = $('dbgCanvas'), x = c.getContext('2d'), W = c.width, R = 1.6;
   const map = (v) => (v / R + 1) * W / 2;
   x.fillStyle = '#0b1220'; x.fillRect(0, 0, W, W);
@@ -753,100 +861,179 @@ function drawDebug() {
   }
   const f = G.raw;
   lines.push('dirección: ' + (G.dir || '—') + (G.armed ? ' (armado)' : ' (vuelve al centro)') + '   fps ' + G.fps);
-  lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms');
+  lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms  suavizado ' + settings.smooth + ' %');
+  lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + ROI_SIZE + ' px (×' + (ROI_SIZE / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
+    (G.eyeBox ? '  · ojos ' + Math.round(G.eyeBox.D) + ' px' : ''));
+  lines.push('deriva corregida  x ' + G.bias.x.toFixed(3) + '  y ' + G.bias.y.toFixed(3));
   if (f) {
     lines.push('ojo x ' + f.ex.toFixed(3) + '  y ' + f.ey.toFixed(3) + '  · cabeza yaw ' + (f.yaw * 57.3).toFixed(1) + '°  pitch ' + (f.pitch * 57.3).toFixed(1) + '°');
     lines.push('EAR der ' + f.earR.toFixed(3) + '  izq ' + f.earL.toFixed(3) + '  umbral cerrado ' + closedThreshold().toFixed(3) + (G.closedNow ? '  CERRADOS' : ''));
   }
-  if (calib) lines.push('calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad);
+  if (calib) lines.push('calibración: ' + new Date(calib.fecha).toLocaleString('es-ES') + '  calidad ' + calib.calidad + '  error ' + Math.round(calib.err * 100) + ' %  ruido ±' + Math.round(calib.ruido * 100) + ' %');
   else lines.push('sin calibración');
   $('dbgText').textContent = lines.join('\n');
 }
 
 /* ============================ Calibración ============================ */
-const CAL_STEPS = [
-  { key: 'center', arrow: '●', title: 'Mira al CENTRO', sub: 'Mira al centro de la pantalla.', voz: 'Mira al centro de la pantalla' },
-  { key: 'left', arrow: '←', title: 'Mira a la IZQUIERDA', sub: 'Fuera del móvil, unos 30 cm a la izquierda.', voz: 'Mira a la izquierda, fuera del móvil' },
-  { key: 'right', arrow: '→', title: 'Mira a la DERECHA', sub: 'Fuera del móvil, unos 30 cm a la derecha.', voz: 'Mira a la derecha, fuera del móvil' },
-  { key: 'up', arrow: '↑', title: 'Mira ARRIBA', sub: 'Por encima del móvil.', voz: 'Mira arriba, por encima del móvil' },
-  { key: 'down', arrow: '↓', title: 'Mira ABAJO', sub: 'Por debajo del móvil, sin cerrar los ojos.', voz: 'Mira abajo, por debajo del móvil' },
+// Puntos en pantalla: centro, bordes, esquinas y de nuevo el centro (para medir la deriva).
+// Los movimientos son cortos: basta con mirar el borde del móvil.
+const CAL_POINTS = [
+  { k: 'center', x: 0, y: 0 }, { k: 'left', x: -1, y: 0 }, { k: 'right', x: 1, y: 0 }, { k: 'up', x: 0, y: -1 }, { k: 'down', x: 0, y: 1 },
+  { k: 'ul', x: -1, y: -1 }, { k: 'dr', x: 1, y: 1 }, { k: 'ur', x: 1, y: -1 }, { k: 'dl', x: -1, y: 1 },
+  { k: 'left2', x: -1, y: 0 }, { k: 'up2', x: 0, y: -1 }, { k: 'right2', x: 1, y: 0 }, { k: 'down2', x: 0, y: 1 },
+  { k: 'center2', x: 0, y: 0 },
 ];
+const CAL_SETTLE = 900, CAL_COLLECT = 1300, CAL_MARGIN = 16;
 let calCancel = false;
 function calShow(arrow, title, sub, p) {
   $('cArrow').textContent = arrow; $('cTitle').textContent = title; $('cSub').textContent = sub; $('cBar').style.width = Math.round((p || 0) * 100) + '%';
 }
+function calMode(m) { const el = $('calib'); el.classList.toggle('points', m === 'points'); el.classList.toggle('test', m === 'test'); }
+function screenPos(x, y) {
+  const W = window.innerWidth, H = window.innerHeight;
+  return { left: CAL_MARGIN + (x + 1) / 2 * (W - 2 * CAL_MARGIN), top: CAL_MARGIN + (y + 1) / 2 * (H - 2 * CAL_MARGIN) };
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function median(arr) { const a = arr.slice().sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : 0; }
 function std(arr) { const m = arr.reduce((a, b) => a + b, 0) / arr.length; return Math.sqrt(arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length); }
+// Mínimos cuadrados con una pequeña regularización (ridge) sobre rasgos estandarizados.
+function fitLinear(rows, ys, lam) {
+  const n = rows[0].length, mu = [0], sd = [1];
+  for (let j = 1; j < n; j++) { const col = rows.map((r) => r[j]); mu[j] = col.reduce((a, b) => a + b, 0) / col.length; sd[j] = std(col) || 1; }
+  const Z = rows.map((r) => r.map((v, j) => (j ? (v - mu[j]) / sd[j] : 1)));
+  const A = Array.from({ length: n }, () => new Array(n).fill(0)), b = new Array(n).fill(0);
+  Z.forEach((r, k) => { for (let i = 0; i < n; i++) { b[i] += r[i] * ys[k]; for (let j = 0; j < n; j++) A[i][j] += r[i] * r[j]; } });
+  for (let i = 1; i < n; i++) A[i][i] += lam;
+  for (let i = 0; i < n; i++) {
+    let p = i; for (let k = i + 1; k < n; k++) if (Math.abs(A[k][i]) > Math.abs(A[p][i])) p = k;
+    [A[i], A[p]] = [A[p], A[i]]; [b[i], b[p]] = [b[p], b[i]];
+    for (let k = 0; k < n; k++) {
+      if (k === i) continue;
+      const m = A[k][i] / (A[i][i] || 1e-12);
+      for (let j = i; j < n; j++) A[k][j] -= m * A[i][j];
+      b[k] -= m * b[i];
+    }
+  }
+  const wz = b.map((v, i) => v / (A[i][i] || 1e-12));
+  const w = wz.map((v, j) => (j ? v / sd[j] : v));
+  for (let j = 1; j < n; j++) w[0] -= wz[j] * mu[j] / sd[j];
+  return w;
+}
 
 function openCalib() {
   calCancel = false;
+  calMode('intro');
   $('calib').classList.add('on');
   $('cStart').style.display = ''; $('cStart').textContent = 'Empezar'; $('cCancel').textContent = 'Cancelar';
-  calShow('👁', 'Calibración', 'Sujeta el móvil como para escribir, con la cara bien iluminada. Te pediré mirar al centro, izquierda, derecha, arriba y abajo, 2 segundos cada vez. Oirás la instrucción y un pitido al terminar cada paso. Haz gestos amplios: mira fuera del móvil.', 0);
+  calShow('👁', 'Calibración fina', 'Sujeta el móvil como para escribir, con la cara bien iluminada. Arriba deberías ver tus ojos ampliados con el iris marcado. ' +
+    'Aparecerá un punto en el centro, en los bordes y en las esquinas de la pantalla: síguelo solo con los ojos, sin mover la cabeza, y míralo fijo hasta que el círculo se cierre. ' +
+    'No hace falta mirar fuera del móvil. Son ' + CAL_POINTS.length + ' puntos (~30 s).', 0);
+  if (!G.on) startCamera();
 }
 async function runCalib() {
   $('cStart').style.display = 'none';
+  while (G.loading) await sleep(100);
   if (!G.on) { calShow('…', 'Abriendo cámara', 'Un momento.', 0); const ok = await startCamera(); if (!ok) { $('calib').classList.remove('on'); return; } }
-  const res = {}, noise = {};
-  for (const st of CAL_STEPS) {
+  if (settings.voice) speak('Sigue el punto con la mirada, sin mover la cabeza', { rate: 1.1 });
+  calMode('points');
+  const dot = $('cDot');
+  const head = !!settings.head;
+  const pts = [];
+  for (let i = 0; i < CAL_POINTS.length; i++) {
+    const pt = CAL_POINTS[i];
     if (calCancel) return;
-    calShow(st.arrow, st.title, st.sub, 0);
-    if (settings.voice) speak(st.voz, { rate: 1.1 });
-    await sleep(1600);
-    beep(700, 0.06);
+    $('cCount').textContent = 'Punto ' + (i + 1) + ' de ' + CAL_POINTS.length;
+    const pos = screenPos(pt.x, pt.y);
+    dot.style.left = pos.left + 'px'; dot.style.top = pos.top + 'px';
+    // El anillo se cierra sobre el punto: ayuda a fijar la mirada.
+    dot.style.setProperty('--ringT', '0s'); dot.style.setProperty('--ring', '2.4');
+    void dot.offsetWidth;
+    dot.style.setProperty('--ringT', ((CAL_SETTLE + CAL_COLLECT) / 1000) + 's'); dot.style.setProperty('--ring', '0.45');
+    await sleep(i === 0 ? CAL_SETTLE + 600 : CAL_SETTLE);
+    if (calCancel) return;
     G.collecting = [];
-    const t0 = now(), DUR = 2000;
-    while (now() - t0 < DUR) { if (calCancel) { G.collecting = null; return; } calShow(st.arrow, st.title, st.sub, (now() - t0) / DUR); await sleep(50); }
+    await sleep(CAL_COLLECT);
     const samples = G.collecting; G.collecting = null;
-    beep(990, 0.08);
-    const n = samples.length, use = samples.slice(Math.floor(n * 0.25));   // descarta el primer cuarto (movimiento)
-    if (use.length < 5) {
-      calShow('⚠', 'No veo bien la cara', 'Mejora la luz, acerca el móvil (30–40 cm) y vuelve a intentarlo.', 0);
+    if (calCancel) return;
+    beep(880, 0.04);
+    const use = samples.slice(Math.floor(samples.length * 0.15));
+    if (use.length < 6) {
+      calMode('intro');
+      calShow('⚠', 'No veo bien los ojos', 'Mejora la luz (de frente, no detrás), acerca el móvil a 30–40 cm, quita reflejos de las gafas y vuelve a intentarlo.', 0);
       $('cStart').style.display = ''; $('cStart').textContent = 'Reintentar';
       return;
     }
-    const o = {};
-    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear']) o[k] = median(use.map((s) => s[k]));
-    res[st.key] = o;
-    noise[st.key] = use;
+    const med = {};
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'ear', 'earR', 'earL']) med[k] = median(use.map((s) => s[k]));
+    pts.push({ pt, med, samples: use });
   }
-  // Calidad: separación de cada extremo respecto al ruido en el centro (con la compensación actual).
-  const cg = noise.center.map(gazeOf);
-  const sdx = std(cg.map((p) => p.x)) || 1e-3, sdy = std(cg.map((p) => p.y)) || 1e-3;
-  const c = gazeOf(res.center);
-  const snr = {
-    left: Math.abs(gazeOf(res.left).x - c.x) / sdx, right: Math.abs(gazeOf(res.right).x - c.x) / sdx,
-    up: Math.abs(gazeOf(res.up).y - c.y) / sdy, down: Math.abs(gazeOf(res.down).y - c.y) / sdy,
-  };
-  const opuestoX = (gazeOf(res.left).x - c.x) * (gazeOf(res.right).x - c.x) < 0;
-  const opuestoY = (gazeOf(res.up).y - c.y) * (gazeOf(res.down).y - c.y) < 0;
-  const minSnr = Math.min(snr.left, snr.right, snr.up, snr.down);
-  const calidad = !opuestoX || !opuestoY ? 'mala' : minSnr > 8 ? 'buena' : minSnr > 4 ? 'aceptable' : 'baja';
-  calib = Object.assign(res, { fecha: new Date().toISOString(), calidad, snr });
+  // --- Ajuste del modelo (rasgos → pantalla) ---
+  const center = pts[0].med;
+  const ear0 = center.ear;
+  const rows = pts.map((p) => featVec(p.med, head, ear0));
+  const lam = 0.3;
+  const wx = fitLinear(rows, pts.map((p) => p.pt.x), lam);
+  const wy = fitLinear(rows, pts.map((p) => p.pt.y), lam);
+  const mapW = (f) => { const v = featVec(f, head, ear0); return { x: wx.reduce((a, w, i) => a + w * v[i], 0), y: wy.reduce((a, w, i) => a + w * v[i], 0) }; };
+  // Error medio en cada punto (en fracción de media pantalla) y ruido en reposo.
+  const errs = pts.map((p) => { const m = mapW(p.med); return Math.hypot(m.x - p.pt.x, m.y - p.pt.y); });
+  const err = errs.reduce((a, b) => a + b, 0) / errs.length;
+  const cs = pts[0].samples.concat(pts[pts.length - 1].samples).map(mapW);
+  const sdx = std(cs.map((p) => p.x)), sdy = std(cs.map((p) => p.y));
+  const ruido = Math.max(sdx, sdy);
+  const c1 = mapW(pts[0].med), c2 = mapW(pts[pts.length - 1].med);
+  const deriva = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+  // Peor dirección: la que queda más lejos de su punto.
+  const dirErr = {};
+  for (const p of pts) { const k = p.pt.k.replace('2', ''); if (!['left', 'right', 'up', 'down'].includes(k)) continue; const m = mapW(p.med); dirErr[k] = Math.max(dirErr[k] || 0, Math.hypot(m.x - p.pt.x, m.y - p.pt.y)); }
+  const calidad = err > 0.45 ? 'mala' : (err < 0.2 && ruido < 0.12) ? 'buena' : (err < 0.3 && ruido < 0.2) ? 'aceptable' : 'baja';
+  const byKey = (k) => pts.find((p) => p.pt.k === k).med;
+  calib = { wx, wy, head, center, down: byKey('down'), fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr };
   lsSet(LS.cal, calib);
+  G.bias = { x: 0, y: 0 }; G.sx = G.sy = null; G.buf = [];
   G.armed = false;
-  const peor = Object.entries(snr).sort((a, b) => a[1] - b[1])[0][0];
+  // Umbral recomendado: lejos del ruido pero sin exigir llegar al borde.
+  const recom = Math.round(Math.min(95, Math.max(55, 100 * (0.45 + 3 * ruido + err))) / 5) * 5;
   const nombres = { left: 'izquierda', right: 'derecha', up: 'arriba', down: 'abajo' };
-  let sub = 'Calidad ' + calidad + '. ';
-  if (calidad === 'mala') sub += 'Las direcciones no quedaron opuestas. Repite con gestos más amplios o desactiva «Compensar giro de cabeza» en Ajustes.';
-  else if (calidad === 'baja') sub += 'La dirección más débil es «' + nombres[peor] + '». Puedes repetir con gestos más amplios.';
-  else sub += 'Ya puedes escribir. Prueba «hola»: arriba, arriba, arriba, izquierda y parpadeo largo.';
+  const peor = Object.entries(dirErr).sort((a, b) => b[1] - a[1])[0];
+  let sub = 'Calidad ' + calidad + ' · error medio ' + Math.round(err * 100) + ' % · temblor ±' + Math.round(ruido * 100) + ' % · deriva ' + Math.round(deriva * 100) + ' %. ';
+  if (calidad === 'mala' || calidad === 'baja') sub += 'La dirección más floja es «' + nombres[peor[0]] + '». Repite con más luz y sin mover la cabeza. ';
+  sub += 'Umbral recomendado: ' + recom + ' % (ahora ' + settings.thr + ' %). Prueba: el círculo rojo sigue tu mirada; mira cada borde y se iluminará.';
+  calMode('test');
   calShow('✓', 'Calibración guardada', sub, 1);
   if (settings.voice) speak('Calibración terminada. Calidad ' + calidad);
-  $('cStart').style.display = ''; $('cStart').textContent = 'Repetir'; $('cCancel').textContent = 'Cerrar';
+  $('cStart').style.display = ''; $('cStart').textContent = 'Repetir';
+  $('cCancel').textContent = 'Cerrar';
+  $('cApply') && $('cApply').remove();
+  if (recom !== settings.thr) {
+    const b = document.createElement('button'); b.id = 'cApply'; b.textContent = 'Usar umbral ' + recom + ' %';
+    b.onclick = () => { settings.thr = recom; lsSet(LS.set, settings); bindSettings(); b.remove(); };
+    $('cCancel').before(b);
+  }
   setMsg('');
+}
+function updateCalibTest(fr, thrF) {
+  if (!$('calib').classList.contains('test')) return;
+  const X = fr.right > 0 ? fr.right : -fr.left, Y = fr.down > 0 ? fr.down : -fr.up;
+  const pos = screenPos(Math.max(-1.05, Math.min(1.05, X)), Math.max(-1.05, Math.min(1.05, Y)));
+  const g = $('cGaze'); g.style.left = pos.left + 'px'; g.style.top = pos.top + 'px';
+  for (const [d, id] of [['left', 'eL'], ['right', 'eR'], ['up', 'eU'], ['down', 'eD']]) $(id).classList.toggle('hot', fr[d] >= thrF);
+}
+function flashEdge(d) {
+  const el = $({ left: 'eL', right: 'eR', up: 'eU', down: 'eD' }[d]);
+  el.style.boxShadow = '0 0 0 6px var(--accent)';
+  setTimeout(() => { el.style.boxShadow = ''; }, 250);
 }
 
 /* ============================ Eventos ============================ */
 function bindSettings() {
   const map = [['sThr', 'thr', 'vThr', (v) => v + ' %'], ['sDwell', 'dwell', 'vDwell', (v) => v + ' ms'], ['sRet', 'ret', 'vRet', (v) => v + ' %'],
-    ['sBlink', 'blink', 'vBlink', (v) => v + ' ms'], ['sClose', 'close', 'vClose', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s'], ['sEar', 'ear', 'vEar', (v) => v + ' %']];
+    ['sBlink', 'blink', 'vBlink', (v) => v + ' ms'], ['sClose', 'close', 'vClose', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s'], ['sEar', 'ear', 'vEar', (v) => v + ' %'], ['sSmooth', 'smooth', 'vSmooth', (v) => v + ' %']];
   for (const [id, key, out, fmt] of map) {
     const el = $(id); el.value = settings[key]; $(out).textContent = fmt(settings[key]);
     el.oninput = () => { settings[key] = +el.value; $(out).textContent = fmt(settings[key]); lsSet(LS.set, settings); };
   }
-  for (const [id, key] of [['sHead', 'head'], ['sSound', 'sound'], ['sVoice', 'voice']]) {
+  for (const [id, key] of [['sHead', 'head'], ['sSound', 'sound'], ['sVoice', 'voice'], ['sDrift', 'drift'], ['sZoom', 'zoom']]) {
     const el = $(id); el.checked = !!settings[key];
     el.onchange = () => { settings[key] = el.checked; lsSet(LS.set, settings); };
   }
@@ -864,7 +1051,12 @@ $('btnDelete').onclick = () => handleGesture('delete', 'manual');
 $('btnCam').onclick = () => { if (G.on) stopCamera(); else startCamera(); };
 $('btnCalib').onclick = openCalib;
 $('cStart').onclick = runCalib;
-$('cCancel').onclick = () => { calCancel = true; G.collecting = null; $('calib').classList.remove('on'); try { speechSynthesis.cancel(); } catch (e) {} };
+$('cCancel').onclick = () => {
+  calCancel = true; G.collecting = null; calMode('intro'); $('calib').classList.remove('on');
+  const ap = $('cApply'); if (ap) ap.remove();
+  G.armed = false;
+  try { speechSynthesis.cancel(); } catch (e) {}
+};
 $('btnPause').onclick = () => { S.paused = !S.paused; $('btnPause').textContent = S.paused ? 'Reanudar' : 'Pausa'; G.armed = false; };
 $('modeFree').onclick = () => setMode('free');
 $('modeCopy').onclick = () => setMode('copy');
@@ -884,7 +1076,7 @@ $('btnCopyStats').onclick = async () => {
   }
   setMsg(ok ? 'Estadísticas copiadas al portapapeles.' : 'No se pudo copiar. Texto:\n' + txt, !ok);
 };
-$('btnResetCal').onclick = () => { calib = null; lsDel(LS.cal); setMsg('Calibración borrada.'); };
+$('btnResetCal').onclick = () => { calib = null; G.bias = { x: 0, y: 0 }; lsDel(LS.cal); setMsg('Calibración borrada.'); };
 $('btnResetSet').onclick = () => { settings = Object.assign({}, DEF_SETTINGS); lsSet(LS.set, settings); bindSettings(); };
 $('btnClearHist').onclick = () => { if (confirm('¿Borrar todo el historial?')) { history = []; lsSet(LS.hist, history); renderHistory(); } };
 $('histBox').addEventListener('toggle', renderHistory);

@@ -1,6 +1,6 @@
 # EyeType · prototipo de escritura con la mirada
 
-Página web (sin instalación) para medir si se puede escribir en español con la mirada usando solo la cámara frontal de un móvil Android con Chrome. No hay teclado QWERTY: se usan **gestos amplios** de mirada y **parpadeos largos**, y un diccionario adivina la palabra (como el antiguo T9).
+Página web (sin instalación) para medir si se puede escribir en español con la mirada usando solo la cámara frontal de un móvil Android con Chrome. No hay teclado QWERTY: se usan **movimientos cortos** de mirada (hacia el borde de la pantalla) y **parpadeos largos**, y un diccionario adivina la palabra (como el antiguo T9).
 
 | Gesto | Acción |
 |---|---|
@@ -12,6 +12,8 @@ Página web (sin instalación) para medir si se puede escribir en español con l
 | ojos cerrados ≥ 1,5 s | borrar (último grupo o última palabra) |
 
 Ejemplo: «hola» = ↑ ↑ ↑ ← y parpadeo largo. Las tildes y la ñ las resuelve el diccionario. Tras cada gesto hay que volver a mirar al centro.
+
+**Zoom a los ojos.** La cámara se abre a 1280×720 y, en cuanto localiza la cara, recorta un cuadrado centrado en los ojos y lo amplía (≈×1,5–2) antes de pasarlo a MediaPipe, así el iris tiene más píxeles. Si pierde la cara vuelve al fotograma entero. Se puede desactivar en Ajustes.
 
 Ficheros: `index.html` (toda la app), `palabras.js` (15 000 palabras ordenadas por frecuencia, de *wordfreq* 3.1.1, CC BY-SA 4.0) y `sw.js` (caché para usarla sin red una vez cargada).
 
@@ -32,8 +34,8 @@ La primera vez necesita red para descargar MediaPipe (cdn.jsdelivr.net, ~10 MB);
 ## Calibrar y practicar
 
 1. **Aprende el método sin cámara**: usa los botones o, con teclado, las flechas, Intro (aceptar) y Retroceso (borrar). Prueba «Copiar frase»: la pista muestra los gestos de cada palabra.
-2. **Activar cámara → Calibrar**. Apoya el móvil o sujétalo firme a 30–40 cm, con buena luz de frente. Una voz te pide mirar al centro, izquierda, derecha, arriba y abajo durante 2 s cada vez. Mira **fuera del móvil** (unos 30 cm hacia cada lado): cuanto más amplio sea el gesto, mejor. Recalibra si cambias de postura o de luz.
-3. Ajustes: umbral (60 %), permanencia (500 ms), compensación del giro de cabeza. Si la calibración sale «mala», desactiva la compensación de cabeza y repite.
+2. **Activar cámara → Calibrar**. Apoya el móvil o sujétalo firme a 30–40 cm, con buena luz de frente. Arriba se ven tus ojos ampliados con el iris marcado: comprueba que los puntos caen bien. Después un punto recorre 14 posiciones (centro, bordes, esquinas, bordes otra vez y centro): síguelo **solo con los ojos**, sin salir de la pantalla. Se ajusta un modelo (iris + giro de cabeza + apertura de párpados → posición en pantalla) y se mide el error, el temblor y la deriva. Al terminar, un círculo rojo sigue tu mirada para probarla y se propone un umbral. Recalibra si cambias de postura o de luz.
+3. Ajustes: umbral (75 % del camino al borde), permanencia (500 ms), suavizado (60 %), corrección lenta de deriva, zoom a los ojos y compensación del giro de cabeza (se aplica al recalibrar).
 4. «Pausa» detiene la detección (para descansar con los ojos cerrados sin borrar).
 5. El panel **Depuración** muestra la cámara, el punto de mirada estimado, la dirección detectada y los umbrales.
 
@@ -47,8 +49,9 @@ Referencia: con estos grupos, las frases de prueba necesitan de media ~6,2 gesto
 
 ## Limitaciones conocidas
 
-- Solo está probado en un navegador de escritorio sin cara real: los umbrales con cámara de verdad están sin validar.
-- La mirada vertical (sobre todo abajo) es la más débil; mirar abajo también entorna los párpados.
+- La mirada vertical (sobre todo abajo) es la más débil; por eso el modelo usa también la apertura de los párpados.
+- Con movimientos cortos, mirar el texto de arriba de la pantalla puede acercarse al umbral de «arriba»: la permanencia (500 ms) y el umbral lo evitan; súbelos si hay gestos falsos.
+- Solo se ha probado con una cara simulada; el zoom y la calibración fina están sin validar con una cámara real.
 - Sensible a la luz, a las gafas con reflejos y a mover el móvil: recalibra a menudo.
 - Solo escribe palabras del diccionario (15 000), en minúsculas y sin signos de puntuación.
 - Consume batería; no hay modo en segundo plano.
