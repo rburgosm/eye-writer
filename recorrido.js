@@ -35,9 +35,10 @@
   // Distribuciones de letras probadas (ver test). La elegida es DISPOSICION_DEFECTO.
   var DISPOSICIONES = {
     '2x3': { filas: 2, columnas: 3, grupos: ['abc', 'def', 'ghijkl', 'mnño', 'pqrs', 'tuvwxyz'] },
-    '2x4': { filas: 2, columnas: 4, grupos: ['abc', 'de', 'fghijk', 'lm', 'nño', 'pqr', 'st', 'uvwxyz'] },
-    '3x3': { filas: 3, columnas: 3, grupos: ['abc', 'de', 'fghi', 'jkl', 'mnño', 'pq', 'r', 'st', 'uvwxyz'] },
-    '3x4': { filas: 3, columnas: 4, grupos: ['a', 'bc', 'd', 'e', 'fghi', 'jkl', 'mnñ', 'o', 'pq', 'r', 's', 'tuvwxyz'] }
+    '2x4': { filas: 2, columnas: 4, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qrs', 'tuvwxyz'] },
+    '3x3': { filas: 3, columnas: 3, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qrs', 't', 'uvwxyz'] },
+    '2x5': { filas: 2, columnas: 5, grupos: ['a', 'bcd', 'efgh', 'ijkl', 'mnñ', 'op', 'qr', 's', 't', 'uvwxyz'] },
+    '3x4': { filas: 3, columnas: 4, grupos: ['a', 'bcd', 'efg', 'hij', 'kl', 'm', 'nñ', 'op', 'qr', 's', 't', 'uvwxyz'] }
   };
   var DISPOSICION_DEFECTO = '3x3';
 
@@ -87,7 +88,7 @@
       K: opc.K || 2,              // permanencia mínima (muestras) en cada fijación
       lambda: opc.lambda != null ? opc.lambda : 1.4, // peso del prior de frecuencia
       haz: opc.haz || 8,
-      bin: opc.bin != null ? opc.bin : 0, // ms por intervalo (0 = sin agrupar)
+      bin: opc.bin != null ? opc.bin : 70, // ms por intervalo (0 = sin agrupar)
       metodo: opc.metodo || 'hmm'
     };
 
