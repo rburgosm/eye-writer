@@ -56,7 +56,7 @@ Referencia: con estos grupos, las frases de prueba necesitan de media ~6,2 gesto
 - La mirada vertical (sobre todo abajo) es la más débil; por eso el modelo usa también la apertura de los párpados.
 - Con movimientos cortos, mirar el texto de arriba de la pantalla puede acercarse al umbral de «arriba»: la permanencia (500 ms) y el umbral lo evitan; súbelos si hay gestos falsos.
 - Solo se ha probado con una cara simulada; el zoom y la calibración fina están sin validar con una cámara real.
-- La geometría supone un campo de visión de cámara de ~80° en diagonal y 160 px CSS por pulgada; si un móvil se aleja mucho de eso, la compensación de distancia y de cabeza pierde precisión (la calibración en sí sigue funcionando).
+- El campo de visión de la cámara (se supone ~80°) no afecta a la mirada: su error se cancela; solo cambia la distancia que se muestra en pantalla. El tamaño real de la pantalla sí importa (con un 20 % de error, al mover la cabeza o el móvil el error subía del 3 % al 12–22 %): mídelo una vez en **Ajustes → Medir pantalla** con una tarjeta bancaria o el DNI (85,6 × 54 mm). La calibración lo pide si no está medido.
 - Los ángulos del ojo se miden respecto a la línea cámara-ojo y no a la perpendicular de la pantalla: con desplazamientos laterales grandes de la cabeza queda un error residual. Recalibrar lo elimina.
 - Sensible a la luz, a las gafas con reflejos y a mover el móvil: recalibra a menudo.
 - Solo escribe palabras del diccionario (15 000), en minúsculas y sin signos de puntuación.

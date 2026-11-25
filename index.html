@@ -121,6 +121,11 @@ label.chk input { width: 22px; height: 22px; }
 #calib .edge.hot { opacity: .8; }
 #eL { left: 0; top: 0; bottom: 0; width: 10px; } #eR { right: 0; top: 0; bottom: 0; width: 10px; }
 #eU { left: 0; right: 0; top: 0; height: 10px; } #eD { left: 0; right: 0; bottom: 0; height: 10px; }
+#measure { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: none; flex-direction: column; align-items: center; justify-content: safe center; padding: 16px; text-align: center; overflow-y: auto; gap: 10px; }
+#measure.on { display: flex; }
+#mCard { border: 3px solid var(--accent); border-bottom: 3px dashed var(--muted); border-radius: 12px 12px 0 0; background: var(--soft); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); flex: none; }
+#measure input[type=range] { width: min(90vw, 420px); }
+#measure .row { width: min(90vw, 420px); }
 #closedBadge { position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 40; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 6px 14px; font-weight: 700; display: none; }
 .muted { color: var(--muted); font-size: 14px; }
 label.postura { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 15px; color: var(--muted); margin: 4px 0; }
@@ -213,7 +218,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <label class="chk"><input type="checkbox" id="sAuto"> Cambiar de postura automáticamente (según cómo ve la cámara tu cara)</label>
     <label class="chk"><input type="checkbox" id="sSound"> Pitidos de confirmación</label>
     <label class="chk"><input type="checkbox" id="sVoice"> Voz guía en la calibración</label>
-    <div class="row"><button id="btnResetCal">Borrar calibración de esta postura</button><button id="btnResetSet">Ajustes por defecto</button></div>
+    <div class="row"><button id="btnMeasure">Medir pantalla (tarjeta)</button><button id="btnResetCal">Borrar calibración de esta postura</button><button id="btnResetSet">Ajustes por defecto</button></div>
   </details>
 
   <details id="histBox">
@@ -235,6 +240,17 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
 
 <div id="closedBadge"></div>
 
+<div id="measure" role="dialog" aria-modal="true">
+  <div class="big" style="font-size:24px;font-weight:800">Medir la pantalla</div>
+  <div class="sub muted" style="font-size:16px;max-width:30em">Apoya una tarjeta de tamaño estándar (bancaria, DNI, tarjeta sanitaria: 85,6 × 54 mm) <b>en vertical</b> sobre el rectángulo, alineada con su esquina superior izquierda,
+    y ajusta hasta que el borde derecho coincida exactamente. Así la app sabe cuántos centímetros mide tu pantalla.</div>
+  <div style="width:100%;display:flex;justify-content:flex-start;padding-left:4px"><div id="mCard">tarjeta</div></div>
+  <input type="range" id="mRange" min="90" max="300" step="0.5">
+  <div class="row"><button id="mMinus">− más pequeña</button><button id="mPlus">+ más grande</button></div>
+  <div class="muted" id="mInfo"></div>
+  <div class="row"><button id="mSave" class="primary">Guardar</button><button id="mCancel">Cancelar</button></div>
+</div>
+
 <div id="calib" role="dialog" aria-modal="true">
   <div class="edge" id="eL"></div><div class="edge" id="eR"></div><div class="edge" id="eU"></div><div class="edge" id="eD"></div>
   <div id="cDot"></div>
@@ -242,6 +258,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
   <div id="cCount"></div>
   <div class="panel">
     <canvas id="cEyes" width="360" height="120"></canvas>
+    <button id="cMeasure" hidden>Primero: medir la pantalla con una tarjeta (una sola vez)</button>
     <label class="postura" id="cPostRow">Calibrar para <select id="cPost"></select></label>
     <div class="arrowbig" id="cArrow"></div>
     <div class="big" id="cTitle">Calibración</div>
@@ -274,7 +291,7 @@ const FRASES = [
   'mañana es un buen día', 'no puedo dormir bien', 'quiero salir a la calle', 'pon la radio más alta',
   'dónde están mis gafas', 'te quiero mucho', 'la comida está muy buena', 'quiero hablar con el médico',
 ];
-const DEF_SETTINGS = { thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true, auto: true };
+const DEF_SETTINGS = { ppi: 0, thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true, auto: true };
 // Una calibración por postura: la cámara ve la cara desde ángulos muy distintos sentado, tumbado boca arriba o de lado.
 const POSTURAS = { sentado: 'Sentado', arriba: 'Tumbado boca arriba', lado: 'Tumbado de lado', otra: 'Otra postura' };
 const LS = { cal: 'eyetype.calib.v3', calOld: 'eyetype.calib.v2', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
@@ -752,27 +769,29 @@ function featVec(f, head, ear0) {
 /* ---- Geometría real: pantalla en cm, posición de la cámara, distancia y posición del ojo ---- */
 // En Chrome para Android 1 px CSS ≈ 1 dp = 1/160 pulgada. El iris humano mide ~11,7 mm en casi todo el mundo,
 // así que su tamaño en la imagen da la distancia ojo-cámara. El campo de visión de las cámaras frontales ronda 80° en diagonal.
-const CM_PER_PX = 2.54 / 160, IRIS_CM = 1.17, CAM_DIAG_FOV = 80 * Math.PI / 180;
+// px CSS por pulgada: 160 en Android por defecto; se puede medir con una tarjeta (Ajustes → Medir pantalla).
+function cmPerPx() { return 2.54 / (settings.ppi || 160); }
+const IRIS_CM = 1.17, CAM_DIAG_FOV = 80 * Math.PI / 180;
 function camF() { return Math.hypot(video.videoWidth || 640, video.videoHeight || 480) / 2 / Math.tan(CAM_DIAG_FOV / 2); }
 // Posición de la cámara respecto al centro de la pantalla (cm, x a la derecha, y hacia abajo).
 function camPos() {
-  const W = innerWidth * CM_PER_PX, H = innerHeight * CM_PER_PX;
+  const W = innerWidth * cmPerPx(), H = innerHeight * cmPerPx();
   let ang = screen.orientation && typeof screen.orientation.angle === 'number' ? screen.orientation.angle : (typeof window.orientation === 'number' ? window.orientation : 0);
   ang = ((ang % 360) + 360) % 360;
   // Entre el borde de la página y la cámara están la barra de estado y la del navegador: se estima con lo que ocupa
   // la pantalla y no la página (aprox. 70 % de esa diferencia queda del lado de la cámara).
   const sw = screen.width || innerWidth, sh = screen.height || innerHeight;
   const extra = (ang === 90 || ang === 270) ? Math.max(sw, sh) - innerWidth : Math.max(sw, sh) - innerHeight;
-  const off = Math.min(2.5, Math.max(0.6, 0.4 + 0.7 * Math.max(0, extra) * CM_PER_PX));
+  const off = Math.min(2.5, Math.max(0.6, 0.4 + 0.7 * Math.max(0, extra) * cmPerPx()));
   if (ang === 90) return { x: -W / 2 - off, y: 0 };     // horizontal girado a la izquierda: la cámara queda a la izquierda
   if (ang === 270) return { x: W / 2 + off, y: 0 };
   if (ang === 180) return { x: 0, y: H / 2 + off };     // boca abajo: cámara abajo
   return { x: 0, y: -H / 2 - off };                       // vertical: cámara arriba
 }
-function normToCm(x, y) { const p = screenPos(x, y); return { x: (p.left - innerWidth / 2) * CM_PER_PX, y: (p.top - innerHeight / 2) * CM_PER_PX }; }
+function normToCm(x, y) { const p = screenPos(x, y); return { x: (p.left - innerWidth / 2) * cmPerPx(), y: (p.top - innerHeight / 2) * cmPerPx() }; }
 function cmToNorm(c) {
   const W = innerWidth, H = innerHeight;
-  return { x: (c.x / CM_PER_PX + W / 2 - CAL_MARGIN) / (W - 2 * CAL_MARGIN) * 2 - 1, y: (c.y / CM_PER_PX + H / 2 - CAL_MARGIN) / (H - 2 * CAL_MARGIN) * 2 - 1 };
+  return { x: (c.x / cmPerPx() + W / 2 - CAL_MARGIN) / (W - 2 * CAL_MARGIN) * 2 - 1, y: (c.y / cmPerPx() + H / 2 - CAL_MARGIN) / (H - 2 * CAL_MARGIN) * 2 - 1 };
 }
 // Posición del ojo (punto medio entre los dos) proyectada sobre el plano de la pantalla, en cm.
 // La imagen de la cámara frontal no está espejada: lo que está a tu derecha sale a la izquierda de la imagen.
@@ -1011,7 +1030,7 @@ function drawDebug() {
   lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms  suavizado ' + settings.smooth + ' %');
   lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + ROI_SIZE + ' px (×' + (ROI_SIZE / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
     (G.eyeBox ? '  · ojos ' + Math.round(G.eyeBox.D) + ' px' : ''));
-  lines.push('distancia ' + (G.dist ? G.dist.toFixed(1) + ' cm' : '—') + (G.raw && G.raw.irisPx ? '  · iris ' + G.raw.irisPx.toFixed(1) + ' px' : '') + '  · pantalla ' + (innerWidth * CM_PER_PX).toFixed(1) + '×' + (innerHeight * CM_PER_PX).toFixed(1) + ' cm');
+  lines.push('distancia ' + (G.dist ? G.dist.toFixed(1) + ' cm' : '—') + (G.raw && G.raw.irisPx ? '  · iris ' + G.raw.irisPx.toFixed(1) + ' px' : '') + '  · pantalla ' + (innerWidth * cmPerPx()).toFixed(1) + '×' + (innerHeight * cmPerPx()).toFixed(1) + ' cm');
   lines.push('deriva corregida  x ' + G.bias.x.toFixed(3) + '  y ' + G.bias.y.toFixed(3));
   if (f) {
     lines.push('ojo x ' + f.ex.toFixed(3) + '  y ' + f.ey.toFixed(3) + '  · cabeza yaw ' + (f.yaw * 57.3).toFixed(1) + '°  pitch ' + (f.pitch * 57.3).toFixed(1) + '°');
@@ -1080,6 +1099,7 @@ function openCalib() {
     'Comprueba que se ven tus ojos con el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~40 s): ' +
     'fija la vista en el puntito central, solo con los ojos y sin mover la cabeza, hasta que el círculo se cierre. Con la distancia (abajo a la izquierda) y la posición de cada punto se calcula el ángulo real de tu mirada. Tumbado de lado: bloquea el giro de pantalla.', 0);
   renderPosturas();
+  $('cMeasure').hidden = !!settings.ppi;
   if (!G.on) startCamera();
 }
 async function runCalib() {
@@ -1164,7 +1184,7 @@ async function runCalib() {
   const cs0 = pts[0].samples.concat(pts[pts.length - 1].samples);
   const pose = { roll: median(cs0.map((s) => s.roll)), yaw: median(cs0.map((s) => s.yaw)), pitch: median(cs0.map((s) => s.pitch)), size: median(cs0.map((s) => s.size)), orient: screenOrient() };
   const postura = $('cPost').value in POSTURAS ? $('cPost').value : perfiles.activa;
-  calib = { geo: true, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
+  calib = { geo: true, ppi: settings.ppi || 160, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
     fecha: new Date().toISOString(), calidad, err, ruido, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
   G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
@@ -1260,6 +1280,30 @@ $('btnResetCal').onclick = () => {
   delete perfiles.lista[perfiles.activa]; savePerfiles(); calib = null; G.bias = { x: 0, y: 0 };
   renderPosturas(); setMsg('Calibración de «' + POSTURAS[perfiles.activa] + '» borrada.');
 };
+/* ---- Medir la pantalla con una tarjeta ---- */
+let mPpi = 160;
+function mRender() {
+  const w = 5.398 / 2.54 * mPpi, h = 8.56 / 2.54 * mPpi;     // tarjeta en vertical: 54 mm de ancho cabe en cualquier móvil
+  // Solo importa el ancho: se muestra la parte de arriba de la tarjeta para que todo quepa en pantalla.
+  $('mCard').style.width = w.toFixed(1) + 'px'; $('mCard').style.height = Math.min(h, innerHeight * 0.3).toFixed(1) + 'px';
+  $('mRange').value = mPpi;
+  $('mInfo').textContent = 'Tu pantalla útil: ' + (innerWidth * 2.54 / mPpi).toFixed(1).replace('.', ',') + ' × ' + (innerHeight * 2.54 / mPpi).toFixed(1).replace('.', ',') + ' cm';
+}
+function openMeasure() { mPpi = settings.ppi || 160; $('mRange').max = Math.max(300, Math.floor((innerWidth - 8) / 5.398 * 2.54)); $('measure').classList.add('on'); mRender(); }
+$('mRange').oninput = () => { mPpi = +$('mRange').value; mRender(); };
+$('mMinus').onclick = () => { mPpi = Math.max(80, mPpi - 0.5); mRender(); };
+$('mPlus').onclick = () => { mPpi += 0.5; mRender(); };
+$('mCancel').onclick = () => $('measure').classList.remove('on');
+$('mSave').onclick = () => {
+  const cambio = settings.ppi && Math.abs(settings.ppi - mPpi) > 1;
+  settings.ppi = mPpi; lsSet(LS.set, settings); $('measure').classList.remove('on');
+  $('cMeasure').hidden = true;
+  const hay = Object.keys(perfiles.lista).length > 0;
+  setMsg('Pantalla medida: ' + (innerWidth * 2.54 / mPpi).toFixed(1).replace('.', ',') + ' × ' + (innerHeight * 2.54 / mPpi).toFixed(1).replace('.', ',') + ' cm.' +
+    (hay || cambio ? ' Vuelve a calibrar tus posturas para aprovecharlo.' : ''));
+};
+$('btnMeasure').onclick = openMeasure;
+$('cMeasure').onclick = openMeasure;
 $('selPost').onchange = () => setPostura($('selPost').value, 'manual');
 $('cPost').onchange = () => setPostura($('cPost').value, 'manual');
 $('btnResetSet').onclick = () => { settings = Object.assign({}, DEF_SETTINGS); lsSet(LS.set, settings); bindSettings(); };
