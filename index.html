@@ -969,7 +969,7 @@ function onResults(res) {
   const thr = closedThreshold();
   const closed = f.earR < thr && f.earL < thr;
   G.closedNow = closed;
-  if (G.rec) recFrame(f, closed, toV);
+  if (G.rec) recFrame(f, closed, toV, (i) => lm[i].z * R.w);
   if (G.collecting) { if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
   const lejos = calib && G.poseOff !== null && G.poseOff > 2;
   setStatus((S.paused ? 'En pausa · ' : (!calib ? 'Sin calibrar · ' : lejos ? 'Postura distinta: recalibra · ' : 'Siguiendo · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''),
@@ -1052,7 +1052,10 @@ function handleBlink(closed, t) {
 /* ============================ Grabación de datos ============================ */
 // Guarda cada fotograma (rasgos, puntos de los ojos en píxeles, objetivo de la calibración) e imágenes de los ojos,
 // para analizar fuera de la app cómo se mueve el ojo y qué capta la cámara. Solo en memoria; se exporta a un archivo.
-const REC_LM = [33, 133, 159, 145, 468, 469, 470, 471, 472, 362, 263, 386, 374, 473, 474, 475, 476, 477];
+// Contorno completo de cada ojo (16 puntos), iris (5 puntos) y puntos de referencia de la cara (con profundidad z).
+const REC_LM = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 468, 469, 470, 471, 472,
+  362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398, 473, 474, 475, 476, 477];
+const REC_LMZ = [1, 6, 168, 10, 152, 234, 454, 33, 263];
 const REC_COLS = ['t', 'fase', 'objX', 'objY', 'cerrado', 'ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'irisPx', 'Dpx', 'ecx', 'ecy', 'miradaX', 'miradaY'];
 function startRec(fase, imgEvery) {
   G.rec = []; G.recImgs = []; G.recT0 = now(); G.recFecha = new Date().toISOString(); G.recPhase = fase; G.recTarget = null;
@@ -1061,12 +1064,13 @@ function startRec(fase, imgEvery) {
 function stopRec(tipo) {
   if (!G.rec) return null;
   G.lastRec = { tipo, fecha: G.recFecha, duracionMs: Math.round(now() - G.recT0), columnas: REC_COLS, landmarks: REC_LM,
-    notaLandmarks: 'x,y en píxeles del vídeo para cada índice de «landmarks», tras las columnas', video: { w: video.videoWidth, h: video.videoHeight },
+    landmarksZ: REC_LMZ,
+    notaLandmarks: 'tras las columnas: x,y (píxeles de vídeo) de cada índice de «landmarks»; después x,y,z de cada índice de «landmarksZ» (z en la misma escala que x)', video: { w: video.videoWidth, h: video.videoHeight },
     fotogramas: G.rec, imagenes: G.recImgs };
   G.rec = null;
   return G.lastRec;
 }
-function recFrame(f, closed, toV) {
+function recFrame(f, closed, toV, toZ) {
   if (G.rec.length >= 8000) return;
   const r4 = (v) => (v === null || v === undefined || !isFinite(v) ? null : Math.round(v * 1e4) / 1e4);
   const tg = G.recTarget;
@@ -1074,6 +1078,7 @@ function recFrame(f, closed, toV) {
   for (const k of ['ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'irisPx', 'Dpx', 'ecx', 'ecy']) row.push(r4(f[k]));
   row.push(r4(G.sx), r4(G.sy));
   for (const i of REC_LM) { const p = toV(i); row.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10); }
+  for (const i of REC_LMZ) { const p = toV(i); row.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, Math.round(toZ(i) * 10) / 10); }
   G.rec.push(row);
   if (f.t - G.recLastImg >= G.recImgEvery && G.recImgs.length < 160) {
     G.recLastImg = f.t;
@@ -1092,7 +1097,7 @@ function eyeSnapshot() {
   x.restore();
   try { return snapCv.toDataURL('image/jpeg', 0.75); } catch (err) { return null; }
 }
-function exportName() { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return 'eyetype-datos-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.json'; }
+function exportName() { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return 'eyetype-datos-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.txt'; }
 // Descarga (o comparte, en Android) un archivo con todo: calibraciones, dispositivo y la última grabación.
 async function exportFull(compartir) {
   const datos = JSON.parse(calibDataText());
@@ -1101,7 +1106,7 @@ async function exportFull(compartir) {
   const name = exportName();
   const kb = Math.round(txt.length / 1024);
   if (compartir === true) try {
-    const file = new File([txt], name, { type: 'application/json' });
+    const file = new File([txt], name, { type: 'text/plain' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title: 'Datos EyeType' });
       setMsg('Archivo compartido (' + kb + ' KB).');
@@ -1110,7 +1115,7 @@ async function exportFull(compartir) {
     setMsg('Este navegador no permite compartir archivos; se descarga.');
   } catch (e) { if (e && e.name === 'AbortError') return false; }
   try {
-    const url = URL.createObjectURL(new Blob([txt], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
     const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     setMsg('Archivo descargado: ' + name + ' (' + kb + ' KB). Lo tienes en Descargas.');
