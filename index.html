@@ -238,7 +238,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <label class="chk"><input type="checkbox" id="sAuto"> Cambiar de postura automáticamente (según cómo ve la cámara tu cara)</label>
     <label class="chk"><input type="checkbox" id="sSound"> Pitidos de confirmación</label>
     <label class="chk"><input type="checkbox" id="sVoice"> Voz guía en la calibración</label>
-    <div class="row"><button id="btnMeasure">Medir pantalla (tarjeta)</button><button id="btnResetCal">Borrar calibración de esta postura</button><button id="btnResetSet">Ajustes por defecto</button></div>
+    <div class="row"><button id="btnSendGH2">Enviar datos a Claude</button><button id="btnMeasure">Medir pantalla (tarjeta)</button><button id="btnResetCal">Borrar calibración de esta postura</button><button id="btnResetSet">Ajustes por defecto</button></div>
   </details>
 
   <details id="histBox">
@@ -254,7 +254,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <canvas id="dbgEyes" width="320" height="107"></canvas>
     <canvas id="dbgCanvas" width="320" height="320"></canvas>
     <div id="dbgText">Sin datos de cámara.</div>
-    <div class="row"><button id="btnCopyCal">Copiar datos de calibración</button></div>
+    <div class="row"><button id="btnCopyCal">Copiar datos de calibración</button><button id="btnSendGH">Enviar a Claude (GitHub)</button></div>
     <div class="row"><button id="btnRec">Grabar 15 s</button><button id="btnExport">Descargar datos completos</button><button id="btnShare">Compartir archivo</button></div>
     <p class="muted">«Grabar» guarda 15 s de cómo se mueven tus ojos (puntos del iris y párpados, e imágenes de los ojos cada medio segundo). La calibración también se graba sola.
     «Descargar datos completos» crea un archivo con todo para analizarlo; no sale del móvil a menos que lo compartas.</p>
@@ -1507,6 +1507,9 @@ async function runCalib() {
   bc.onclick = async () => { const ok = await copyCalibData(); bc.textContent = ok ? 'Copiado ✓' : 'No se pudo copiar'; };
   $('cCancel').before(bc);
   $('cExport') && $('cExport').remove();
+  $('cSend') && $('cSend').remove();
+  const bs = document.createElement('button'); bs.id = 'cSend'; bs.textContent = 'Enviar a Claude'; bs.onclick = sendToGitHub;
+  $('cCancel').before(bs);
   const be = document.createElement('button'); be.id = 'cExport'; be.textContent = 'Descargar datos completos';
   be.onclick = () => exportFull(false);
   $('cCancel').before(be);
@@ -1722,6 +1725,7 @@ $('cCancel').onclick = () => {
   const ap = $('cApply'); if (ap) ap.remove();
   const cc = $('cCopy'); if (cc) cc.remove();
   const ce = $('cExport'); if (ce) ce.remove();
+  const cs = $('cSend'); if (cs) cs.remove();
   G.armed = false;
   try { speechSynthesis.cancel(); } catch (e) {}
 };
@@ -1772,6 +1776,45 @@ function calibDataText() {
   };
   return JSON.stringify(round(datos));
 }
+// Enviar los datos a GitHub (issue del repositorio) para que Claude los lea: comprimidos (deflate + base64url)
+// dentro de un enlace a «nueva issue» ya rellenada. Solo números (sin imágenes); hay que pulsar «Submit».
+async function comprimir(txt) {
+  const cs = new CompressionStream('deflate-raw');
+  const buf = await new Response(new Blob([txt]).stream().pipeThrough(cs)).arrayBuffer();
+  let bin = ''; const u8 = new Uint8Array(buf);
+  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function repoGitHub() {
+  const h = location.hostname.match(/^([a-z0-9-]+)\.github\.io$/i), seg = location.pathname.split('/').filter(Boolean)[0];
+  return h && seg ? h[1] + '/' + seg : 'rburgosm/eye-writer';
+}
+async function sendToGitHub() {
+  if (typeof CompressionStream !== 'function') { setMsg('Este navegador no puede comprimir los datos. Usa «Copiar datos».', true); return; }
+  const datos = JSON.parse(calibDataText());
+  const resumen = Object.entries(datos.perfiles || {}).map(([k, c]) => '- ' + (POSTURAS[k] || k) + ': calidad ' + c.calidad + (c.sep ? ' (' + Object.entries(c.sep).map(([d, v]) => d + ' ' + Number(v).toFixed(1)).join(', ') + ')' : '') +
+    ', error ' + Math.round((c.err || 0) * 100) + ' %' + (c.ruidoUso ? ', temblor ±' + Math.round(c.ruidoUso * 100) + ' %' : '') + (c.eleccion ? ', ' + (c.tipo === 'cuad' ? 'curvo' : 'lineal') + (c.head ? ' con' : ' sin') + ' cabeza' : '')).join('\n') || '- sin calibraciones';
+  const titulo = 'Datos de calibración ' + new Date().toLocaleString('es-ES');
+  const base = 'https://github.com/' + repoGitHub() + '/issues/new?title=' + encodeURIComponent(titulo) + '&body=';
+  // Si no cabe en el enlace (~8000 caracteres), se quitan detalles poco a poco.
+  const intentos = [
+    (d) => d,
+    (d) => { for (const k in d.perfiles) if (k !== d.posturaActiva) delete d.perfiles[k].puntos; return d; },
+    (d) => { for (const k in d.perfiles) delete d.perfiles[k].puntos; return d; },
+    (d) => { d.perfiles = { [d.posturaActiva]: d.perfiles[d.posturaActiva] }; if (d.perfiles[d.posturaActiva]) delete d.perfiles[d.posturaActiva].puntos; return d; },
+  ];
+  let url = null, recorte = 0;
+  for (let i = 0; i < intentos.length; i++) {
+    const d = intentos[i](JSON.parse(JSON.stringify(datos)));
+    const z = await comprimir(JSON.stringify(d));
+    const body = 'Datos de EyeType para Claude (' + navigator.userAgent.replace(/\).*$/, ')') + ').\n\n' + resumen + '\n\n```\nEYETYPE1:' + z + '\n```\n';
+    const u = base + encodeURIComponent(body);
+    if (u.length <= 7800) { url = u; recorte = i; break; }
+  }
+  if (!url) { setMsg('Los datos no caben en el enlace. Usa «Descargar datos completos».', true); return; }
+  window.open(url, '_blank');
+  setMsg('Se abre GitHub con los datos ya escritos' + (recorte ? ' (resumidos para que quepan)' : '') + '. Pulsa «Submit new issue» y avísame en el chat.');
+}
 async function copyCalibData() {
   const txt = calibDataText();
   const ok = await copyText(txt);
@@ -1781,6 +1824,8 @@ async function copyCalibData() {
   return ok;
 }
 $('btnCopyCal').onclick = copyCalibData;
+$('btnSendGH').onclick = sendToGitHub;
+$('btnSendGH2').onclick = sendToGitHub;
 $('btnRec').onclick = () => recordFree(15);
 $('btnExport').onclick = () => exportFull(false);
 $('btnShare').onclick = () => exportFull(true);
