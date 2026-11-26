@@ -767,6 +767,16 @@ function drawEyes(cv) {
     x.beginPath(); x.arc(p.x, p.y, (p.i >= 468 ? 4 : 2) / k, 0, 7); x.fill();
   }
   x.restore();
+  // Apertura de los ojos: si la cámara queda por debajo de los ojos, al mirar la pantalla bajas la mirada, el párpado
+  // tapa el iris y la medida se vuelve muy ruidosa (datos reales: apertura 0,12 → la mitad de precisión que con 0,29).
+  if (G.raw && G.raw.ear) {
+    G.earS = G.earS ? G.earS + 0.15 * (G.raw.ear - G.earS) : G.raw.ear;
+    const e = G.earS, ok = e >= 0.24, mid = e >= 0.18;
+    const txt = ok ? 'ojos bien abiertos ✓' : mid ? 'ojos algo cerrados: sube un poco el móvil' : 'ojos casi cerrados: sube el móvil a la altura de los ojos';
+    x.font = '600 13px sans-serif'; const tw = x.measureText(txt).width;
+    x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(W - tw - 18, 6, tw + 12, 20);
+    x.fillStyle = ok ? '#4ade80' : mid ? '#fbbf24' : '#f87171'; x.fillText(txt, W - tw - 12, 21);
+  }
   if (G.dist) {
     const d = Math.round(G.dist), txt = 'a ' + d + ' cm' + (d < 22 ? ' · aléjate un poco' : d > 55 ? ' · acércate un poco' : '');
     x.font = '600 14px sans-serif'; const tw = x.measureText(txt).width;
@@ -970,7 +980,7 @@ function onResults(res) {
   const closed = f.earR < thr && f.earL < thr;
   G.closedNow = closed;
   if (G.rec) recFrame(f, closed, toV, (i) => lm[i].z * R.w);
-  if (G.collecting) { if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
+  if (G.collecting) { if (closed) G.collectClosed = (G.collectClosed || 0) + 1; if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
   const lejos = calib && G.poseOff !== null && G.poseOff > 2;
   setStatus((S.paused ? 'En pausa · ' : (!calib ? 'Sin calibrar · ' : lejos ? 'Postura distinta: recalibra · ' : 'Siguiendo · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''),
     S.paused || !calib || lejos ? 'warn' : 'ok');
@@ -1252,7 +1262,8 @@ function openCalib() {
   $('calib').classList.add('on');
   $('cStart').style.display = ''; $('cStart').textContent = 'Empezar'; $('cCancel').textContent = 'Cancelar';
   calShow('👁', 'Calibración fina', 'Ponte en la postura en la que vas a escribir y elígela arriba: se guarda una calibración por postura. ' +
-    'Comprueba que se ven tus ojos con el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~40 s' + (settings.pursuit ? ', y después sigue el punto mientras se mueve, 16 s' : '') + '): ' +
+    'Comprueba en la imagen que tus ojos salen «bien abiertos»: el móvil debe estar a la altura de tus ojos o un poco por encima, no más abajo. ' +
+    'Comprueba también que se ve el iris marcado. Un punto recorrerá el centro, los bordes y las esquinas de la pantalla (' + CAL_POINTS.length + ' puntos, ~40 s' + (settings.pursuit ? ', y después sigue el punto mientras se mueve, 16 s' : '') + '): ' +
     'fija la vista en el puntito central, solo con los ojos y sin mover la cabeza, hasta que el círculo se cierre. Con la distancia (abajo a la izquierda) y la posición de cada punto se calcula el ángulo real de tu mirada. Tumbado de lado: bloquea el giro de pantalla.', 0);
   renderPosturas();
   $('cMeasure').hidden = !!settings.ppi;
@@ -1281,7 +1292,7 @@ async function runCalib() {
     dot.style.setProperty('--ringT', ((CAL_SETTLE + CAL_COLLECT) / 1000) + 's'); dot.style.setProperty('--ring', '0.45');
     await sleep(i === 0 ? CAL_SETTLE + 600 : CAL_SETTLE);
     if (calCancel) return;
-    G.collecting = [];
+    G.collecting = []; G.collectClosed = 0;
     await sleep(CAL_COLLECT);
     const samples = G.collecting; G.collecting = null;
     if (calCancel) return;
@@ -1290,7 +1301,8 @@ async function runCalib() {
     if (use.length < 6) {
       stopRec('calibracion-fallida');
       calMode('intro');
-      calShow('⚠', 'No veo bien los ojos', 'Mejora la luz (de frente, no detrás), acerca el móvil a 30–40 cm, quita reflejos de las gafas y vuelve a intentarlo.', 0);
+      if ((G.collectClosed || 0) > samples.length) calShow('⚠', 'Tus ojos se ven cerrados', 'La cámara ve tus párpados casi cerrados: suele pasar cuando el móvil está más bajo que tus ojos y miras hacia abajo. Sube el móvil hasta la altura de los ojos (o un poco por encima) y vuelve a intentarlo. Si aun así pasa, baja «Sensibilidad de ojo cerrado» en Ajustes.', 0);
+      else calShow('⚠', 'No veo bien los ojos', 'Mejora la luz (de frente, no detrás), acerca el móvil a 30–40 cm, quita reflejos de las gafas y vuelve a intentarlo.', 0);
       $('cStart').style.display = ''; $('cStart').textContent = 'Reintentar';
       return;
     }
@@ -1490,10 +1502,12 @@ async function runCalib() {
   const peor = Object.entries(dirErr).sort((a, b) => b[1] - a[1])[0];
   const f1 = (v) => v.toFixed(1).replace('.', ',');
   const sym = { left: '←', right: '→', up: '↑', down: '↓' };
+  const earMed = median(all.map((s) => s.ear));
   const nota = (v) => (v >= 8 ? 'bien' : v >= 5 ? 'justa' : v >= 2 ? 'floja' : 'falla');
   const porDir = ['left', 'right', 'up', 'down'].map((d) => sym[d] + ' ' + nota(sep[d])).join(' · ');
   let sub = 'Calidad ' + calidad + ': ' + porDir + '. A ' + Math.round(d0) + ' cm la pantalla abarca ' + Math.round(spanX) + '° × ' + Math.round(spanY) + '°; error medio ' + f1(errDeg) + '° (' + Math.round(err * 100) + ' %); temblor ±' +
     Math.round(ruidoUso * 100) + ' % suavizado (±' + f1(ruidoDeg) + '° sin suavizar). ';
+  if (earMed < 0.2) sub = 'Tus ojos se veían casi cerrados (apertura ' + earMed.toFixed(2).replace('.', ',') + '; abiertos es más de 0,25): la cámara queda por debajo de tus ojos, al mirar la pantalla bajas el párpado y apenas se ve el iris. Sube el móvil hasta la altura de los ojos o un poco por encima y recalibra. ' + sub;
   if (seguimiento) sub += 'Siguiendo el punto en movimiento (datos no usados en el ajuste): error ±' + Math.round(seguimiento.errMov * 100) + ' % (' + f1(seguimiento.errMovDeg) + '°)' +
     (seguimiento.usado ? '' : '; no mejoró, se usan solo los puntos fijos') + '. ';
   sub += 'Elegido: modelo ' + (model.tipo === 'cuad' ? 'curvo' : 'lineal') + ', ' + (model.head ? 'con' : 'sin') + ' compensación de giro de cabeza. ';
