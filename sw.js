@@ -1,6 +1,6 @@
 // Service worker mínimo: permite usar la app sin red una vez cargada.
 // Ficheros propios: primero red, si falla caché. MediaPipe (versión fija en jsdelivr): primero caché.
-const CACHE = 'eyetype-v3';
+const CACHE = 'eyetype-v4';
 const PROPIOS = ['./', './index.html', './palabras.js', './recorrido.js'];
 
 self.addEventListener('install', (e) => {
@@ -16,7 +16,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.hostname === 'cdn.jsdelivr.net') {
+  if (url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'storage.googleapis.com') {
     e.respondWith(
       caches.match(req).then((hit) => hit || fetch(req).then((res) => {
         if (res && (res.ok || res.type === 'opaque')) {

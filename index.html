@@ -235,6 +235,10 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <label class="chk"><input type="checkbox" id="sDrift"> Corregir deriva lenta del centro</label>
     <label class="chk"><input type="checkbox" id="sZoom"> Zoom digital a la zona de los ojos</label>
     <label class="chk"><input type="checkbox" id="sPursuit"> Calibración con punto en movimiento (más fina, +16 s)</label>
+    <label class="postura" style="color:var(--ink)">Motor <select id="sMotor">
+      <option value="clasico">Clásico (Face Mesh)</option>
+      <option value="nuevo">Nuevo (Face Landmarker, experimental)</option></select></label>
+    <p class="muted">El motor nuevo calcula además «hacia dónde miran los ojos» con una red entrenada. Descarga ~4 MB la primera vez. Al cambiarlo hay que recalibrar.</p>
     <label class="chk"><input type="checkbox" id="sAuto"> Cambiar de postura automáticamente (según cómo ve la cámara tu cara)</label>
     <label class="chk"><input type="checkbox" id="sSound"> Pitidos de confirmación</label>
     <label class="chk"><input type="checkbox" id="sVoice"> Voz guía en la calibración</label>
@@ -329,7 +333,7 @@ const FRASES = [
   'mañana es un buen día', 'no puedo dormir bien', 'quiero salir a la calle', 'pon la radio más alta',
   'dónde están mis gafas', 'te quiero mucho', 'la comida está muy buena', 'quiero hablar con el médico',
 ];
-const DEF_SETTINGS = { ppi: 0, thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true, auto: true, pursuit: true };
+const DEF_SETTINGS = { ppi: 0, thr: 75, dwell: 500, ret: 35, blink: 400, close: 1500, ear: 55, head: true, sound: true, voice: true, smooth: 60, drift: true, zoom: true, auto: true, pursuit: true, motor: 'clasico', scan: 1000 };
 // Una calibración por postura: la cámara ve la cara desde ángulos muy distintos sentado, tumbado boca arriba o de lado.
 const POSTURAS = { sentado: 'Sentado', arriba: 'Tumbado boca arriba', lado: 'Tumbado de lado', otra: 'Otra postura' };
 const LS = { cal: 'eyetype.calib.v3', calOld: 'eyetype.calib.v2', set: 'eyetype.settings.v1', hist: 'eyetype.history.v1' };
@@ -652,6 +656,18 @@ function loadScript(src, timeoutMs) {
   });
 }
 
+// Motor nuevo: MediaPipe Tasks «Face Landmarker». Además de los puntos de la cara da «blendshapes»
+// (eyeLookIn/Out/Up/Down de cada ojo) y la matriz de pose de la cabeza.
+const TV_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const FL_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+async function loadLandmarker() {
+  const mod = await import(TV_BASE + '/vision_bundle.mjs');
+  const files = await mod.FilesetResolver.forVisionTasks(TV_BASE + '/wasm');
+  const opts = (delegate) => ({ baseOptions: { modelAssetPath: FL_MODEL, delegate }, runningMode: 'VIDEO', numFaces: 1,
+    outputFaceBlendshapes: true, outputFacialTransformationMatrixes: true, minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+  try { return await mod.FaceLandmarker.createFromOptions(files, opts('GPU')); }
+  catch (e) { return await mod.FaceLandmarker.createFromOptions(files, opts('CPU')); }
+}
 async function startCamera() {
   if (G.on) return true;
   if (G.loading) return false;
@@ -671,6 +687,11 @@ async function startCamera() {
     video.srcObject = G.stream; video.style.display = 'block';
     try { await video.play(); } catch (e) {}
     setStatus('Cargando modelo…', 'warn');
+    G.fl = null; G.motor = settings.motor === 'nuevo' ? 'nuevo' : 'clasico';
+    if (G.motor === 'nuevo') {
+      try { G.fl = await loadLandmarker(); }
+      catch (e) { throw new Error('No se pudo cargar el motor nuevo (' + (e && e.message || e) + '). Cambia a «Clásico» en Ajustes. El modo práctica sigue funcionando.'); }
+    } else {
     if (typeof window.FaceMesh !== 'function') {
       try { await loadScript(FM_BASE + 'face_mesh.js', 30000); }
       catch (e) { throw new Error('No se pudo cargar MediaPipe Face Mesh desde cdn.jsdelivr.net (' + e.message + '). Comprueba la conexión. El modo práctica sigue funcionando.'); }
@@ -680,6 +701,7 @@ async function startCamera() {
     G.fm.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
     G.fm.onResults(onResults);
     if (typeof G.fm.initialize === 'function') await G.fm.initialize();
+    }
     G.on = true; G.loading = false; G.roi = null;
     $('btnCam').textContent = 'Apagar cámara';
     setMsg(calib ? '' : 'Cámara lista. Ahora pulsa «Calibrar».');
@@ -720,7 +742,14 @@ async function tick() {
   if (!G.on) return;
   if (!G.busy && video.readyState >= 2) {
     G.busy = true;
-    try { await G.fm.send({ image: prepareInput() }); }
+    try {
+      if (G.fl) {
+        const img = prepareInput();
+        let ts = performance.now(); if (ts <= (G.lastTs || 0)) ts = G.lastTs + 1; G.lastTs = ts;
+        const r = G.fl.detectForVideo(img, ts);
+        onResults({ image: img, multiFaceLandmarks: r.faceLandmarks, blend: r.faceBlendshapes && r.faceBlendshapes[0], mat: r.facialTransformationMatrixes && r.facialTransformationMatrixes[0] });
+      } else await G.fm.send({ image: prepareInput() });
+    }
     catch (e) { setMsg('Error de MediaPipe: ' + (e && e.message || e) + '. El modo práctica sigue funcionando.', true); stopCamera(); }
     G.busy = false;
   }
@@ -816,9 +845,10 @@ function gazeOf(f, head) {
 // Vector de rasgos del modelo: mirada del iris (+ cabeza) y apertura de párpados relativa (ayuda mucho en vertical).
 // tipo 'cuad' añade términos cuadráticos: el ojo no responde de forma lineal en los extremos.
 // Solo se usa si la calibración con punto en movimiento aporta datos de toda la pantalla y mejora el error.
-function featVec(f, head, ear0, tipo) {
+function featVec(f, head, ear0, tipo, blend) {
   const g = gazeOf(f, head);
   const v = [1, g.x, g.y, (f.ear - ear0) / (ear0 || 1)];
+  if (blend) v.push(f.bx || 0, f.by || 0);     // señales de mirada del motor nuevo
   if (tipo === 'cuad') v.push(g.x * g.x, g.y * g.y, g.x * g.y);
   return v;
 }
@@ -863,7 +893,7 @@ function distOf(f) {
 // Modelo: rasgos del ojo → tangente del ángulo de mirada (horizontal y vertical) respecto al ojo.
 // Punto mirado = ojo + tangente × distancia. Así, si acercas o alejas el móvil o mueves la cabeza, el punto sigue bien.
 function gazePointCm(f, model, d, E) {
-  const v = featVec(f, model.head, model.center.ear, model.tipo);
+  const v = featVec(f, model.head, model.center.ear, model.tipo, model.blend);
   const tx = model.wx.reduce((a, w, i) => a + w * v[i], 0), ty = model.wy.reduce((a, w, i) => a + w * v[i], 0);
   return { x: E.x + tx * d, y: E.y + ty * d, tx, ty };
 }
@@ -971,6 +1001,14 @@ function onResults(res) {
   f.Dpx = G.eyeBox.D / Math.max(0.5, Math.cos(f.yaw)); f.ecx = G.eyeBox.cx; f.ecy = G.eyeBox.cy;
   f.dIris = f.irisPx > 2 ? camF() * IRIS_CM / f.irisPx : null;
   f.t = G.sendT || t;
+  if (res.blend && res.blend.categories) {
+    const b = {}; for (const c of res.blend.categories) b[c.categoryName] = c.score;
+    f.bs = b;
+    // bx > 0: mirada hacia la izquierda de la persona; by > 0: hacia arriba.
+    f.bx = ((b.eyeLookOutLeft || 0) + (b.eyeLookInRight || 0) - (b.eyeLookInLeft || 0) - (b.eyeLookOutRight || 0)) / 2;
+    f.by = ((b.eyeLookUpLeft || 0) + (b.eyeLookUpRight || 0) - (b.eyeLookDownLeft || 0) - (b.eyeLookDownRight || 0)) / 2;
+  }
+  G.lastMat = res.mat && res.mat.data ? Array.from(res.mat.data) : null;
   const dNow = distOf(f);
   if (dNow && isFinite(dNow)) G.dist = G.dist ? G.dist + 0.1 * (dNow - G.dist) : dNow;
   G.raw = f;
@@ -982,6 +1020,7 @@ function onResults(res) {
   if (G.rec) recFrame(f, closed, toV, (i) => lm[i].z * R.w);
   if (G.collecting) { if (closed) G.collectClosed = (G.collectClosed || 0) + 1; if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
   const lejos = calib && G.poseOff !== null && G.poseOff > 2;
+  if (calib && calib.motor && G.motor && calib.motor !== G.motor && !G.avisoMotor) { G.avisoMotor = true; setMsg('Esta calibración se hizo con el motor ' + calib.motor + ' y ahora usas el ' + G.motor + ': recalibra.', true); }
   setStatus((S.paused ? 'En pausa · ' : (!calib ? 'Sin calibrar · ' : lejos ? 'Postura distinta: recalibra · ' : 'Siguiendo · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''),
     S.paused || !calib || lejos ? 'warn' : 'ok');
   handleBlink(closed, t);
@@ -1066,16 +1105,18 @@ function handleBlink(closed, t) {
 const REC_LM = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 468, 469, 470, 471, 472,
   362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398, 473, 474, 475, 476, 477];
 const REC_LMZ = [1, 6, 168, 10, 152, 234, 454, 33, 263];
+const REC_BS = ['eyeLookInLeft', 'eyeLookOutLeft', 'eyeLookUpLeft', 'eyeLookDownLeft', 'eyeLookInRight', 'eyeLookOutRight', 'eyeLookUpRight', 'eyeLookDownRight',
+  'eyeBlinkLeft', 'eyeBlinkRight', 'eyeSquintLeft', 'eyeSquintRight', 'eyeWideLeft', 'eyeWideRight'];
 const REC_COLS = ['t', 'fase', 'objX', 'objY', 'cerrado', 'ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'irisPx', 'Dpx', 'ecx', 'ecy', 'miradaX', 'miradaY'];
 function startRec(fase, imgEvery) {
-  G.rec = []; G.recImgs = []; G.recT0 = now(); G.recFecha = new Date().toISOString(); G.recPhase = fase; G.recTarget = null;
+  G.rec = []; G.recImgs = []; G.recMotor = G.motor || 'clasico'; G.recT0 = now(); G.recFecha = new Date().toISOString(); G.recPhase = fase; G.recTarget = null;
   G.recImgEvery = imgEvery || 700; G.recLastImg = -1e9;
 }
 function stopRec(tipo) {
   if (!G.rec) return null;
   G.lastRec = { tipo, fecha: G.recFecha, duracionMs: Math.round(now() - G.recT0), columnas: REC_COLS, landmarks: REC_LM,
-    landmarksZ: REC_LMZ,
-    notaLandmarks: 'tras las columnas: x,y (píxeles de vídeo) de cada índice de «landmarks»; después x,y,z de cada índice de «landmarksZ» (z en la misma escala que x)', video: { w: video.videoWidth, h: video.videoHeight },
+    landmarksZ: REC_LMZ, motor: G.recMotor, blendshapes: G.recMotor === 'nuevo' ? REC_BS : null, matriz: G.recMotor === 'nuevo' ? 16 : 0,
+    notaLandmarks: 'tras las columnas: x,y (píxeles de vídeo) de cada índice de «landmarks»; después x,y,z de cada índice de «landmarksZ» (z en la misma escala que x); con el motor nuevo, después cada «blendshape» y los 16 valores de la matriz de pose', video: { w: video.videoWidth, h: video.videoHeight },
     fotogramas: G.rec, imagenes: G.recImgs };
   G.rec = null;
   return G.lastRec;
@@ -1089,6 +1130,10 @@ function recFrame(f, closed, toV, toZ) {
   row.push(r4(G.sx), r4(G.sy));
   for (const i of REC_LM) { const p = toV(i); row.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10); }
   for (const i of REC_LMZ) { const p = toV(i); row.push(Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, Math.round(toZ(i) * 10) / 10); }
+  if (G.recMotor === 'nuevo') {
+    for (const k of REC_BS) row.push(f.bs && f.bs[k] !== undefined ? Math.round(f.bs[k] * 1e4) / 1e4 : null);
+    const m = G.lastMat || []; for (let i = 0; i < 16; i++) row.push(m[i] !== undefined ? Math.round(m[i] * 1e4) / 1e4 : null);
+  }
   G.rec.push(row);
   if (f.t - G.recLastImg >= G.recImgEvery && G.recImgs.length < 160) {
     G.recLastImg = f.t;
@@ -1183,6 +1228,7 @@ function drawDebug() {
   lines.push('umbral ' + settings.thr + ' %  retorno ' + settings.ret + ' %  permanencia ' + settings.dwell + ' ms  suavizado ' + settings.smooth + ' %');
   lines.push('cámara ' + (video.videoWidth || 0) + '×' + (video.videoHeight || 0) + (G.inRoi && G.inRoi.crop ? '  · zoom: recorte ' + G.inRoi.w + ' px → ' + G.cv.width + ' px (×' + (G.cv.width / G.inRoi.w).toFixed(1) + ')' : '  · sin zoom') +
     (G.eyeBox ? '  · ojos ' + Math.round(G.eyeBox.D) + ' px' : ''));
+  lines.push('motor ' + (G.motor || '—') + (G.raw && G.raw.bx !== undefined ? '  · mirada (blendshapes) x ' + G.raw.bx.toFixed(2) + ' y ' + G.raw.by.toFixed(2) : ''));
   lines.push('distancia ' + (G.dist ? G.dist.toFixed(1) + ' cm' : '—') + (G.raw && G.raw.irisPx ? '  · iris ' + G.raw.irisPx.toFixed(1) + ' px' : '') + '  · pantalla ' + (innerWidth * cmPerPx()).toFixed(1) + '×' + (innerHeight * cmPerPx()).toFixed(1) + ' cm');
   lines.push('deriva corregida  x ' + G.bias.x.toFixed(3) + '  y ' + G.bias.y.toFixed(3));
   if (f) {
@@ -1307,7 +1353,7 @@ async function runCalib() {
       return;
     }
     const med = {};
-    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'size', 'Dpx', 'ecx', 'ecy', 'irisPx']) med[k] = median(use.map((s) => s[k]));
+    for (const k of ['ex', 'ey', 'yaw', 'pitch', 'roll', 'ear', 'earR', 'earL', 'size', 'Dpx', 'ecx', 'ecy', 'irisPx', 'bx', 'by']) med[k] = median(use.map((s) => s[k]));
     pts.push({ pt, med, samples: use });
   }
   // --- Fase 2: punto en movimiento ---
@@ -1354,9 +1400,9 @@ async function runCalib() {
   const target = (f, n) => { const P = normToCm(n.x, n.y), d = dOf(f), E = Eof(f); return { cm: P, tx: (P.x - E.x) / d, ty: (P.y - E.y) / d }; };
   for (const p of pts) { const tg = target(p.med, p.pt); p.cm = tg.cm; p.tx = tg.tx; p.ty = tg.ty; }
   const lam = 0.3, W_PUNTO = 6;
-  const fitModel = (tipo, filas, hd) => {
-    const rows = filas.map((r) => featVec(r.f, hd, ear0, tipo));
-    return { head: hd, center, tipo, wx: fitLinear(rows, filas.map((r) => r.tx), lam, filas.map((r) => r.w)), wy: fitLinear(rows, filas.map((r) => r.ty), lam, filas.map((r) => r.w)) };
+  const fitModel = (tipo, filas, hd, bl) => {
+    const rows = filas.map((r) => featVec(r.f, hd, ear0, tipo, bl));
+    return { head: hd, blend: !!bl, center, tipo, wx: fitLinear(rows, filas.map((r) => r.tx), lam, filas.map((r) => r.w)), wy: fitLinear(rows, filas.map((r) => r.ty), lam, filas.map((r) => r.w)) };
   };
   const filasPuntos = pts.map((p) => ({ f: p.med, tx: p.tx, ty: p.ty, w: W_PUNTO }));
   const predM = (m, f) => cmToNorm(gazePointCm(f, m, dOf(f), Eof(f)));
@@ -1376,10 +1422,10 @@ async function runCalib() {
     return Math.max(0.01, std(a.map((p) => p.x)), std(a.map((p) => p.y)));
   };
   // Error de cada punto fijo con un ajuste hecho SIN ese punto (validación cruzada).
-  const looErr = (tipo, hd) => {
+  const looErr = (tipo, hd, bl) => {
     let e = 0;
     for (let i = 0; i < filasPuntos.length; i++) {
-      const m = fitModel(tipo, filasPuntos.filter((_, j) => j !== i), hd), q = predM(m, pts[i].med);
+      const m = fitModel(tipo, filasPuntos.filter((_, j) => j !== i), hd, bl), q = predM(m, pts[i].med);
       e += Math.hypot(q.x - pts[i].pt.x, q.y - pts[i].pt.y);
     }
     return e / filasPuntos.length;
@@ -1388,10 +1434,13 @@ async function runCalib() {
   // La compensación del giro de cabeza usa la profundidad (z) de MediaPipe, que en una cámara real puede
   // temblar tanto como la propia señal del ojo: por eso se elige con datos, no a ciegas.
   const conCabeza = settings.head ? [false, true] : [false];
-  let candidatos = conCabeza.map((hd) => { const m = fitModel('lin', filasPuntos, hd), err = looErr('lin', hd), tem = ruidoDe(m); return { tipo: 'lin', hd, m, err, tem, score: err + tem }; });
+  const hayBlend = typeof pts[0].med.bx === 'number' && isFinite(pts[0].med.bx);
+  const conBlend = hayBlend ? [false, true] : [false];
+  let candidatos = [];
+  for (const hd of conCabeza) for (const bl of conBlend) { const m = fitModel('lin', filasPuntos, hd, bl), err = looErr('lin', hd, bl), tem = ruidoDe(m); candidatos.push({ tipo: 'lin', hd, bl, m, err, tem, score: err + tem }); }
   candidatos.sort((x, y) => x.score - y.score);
   let model = candidatos[0].m;
-  let eleccion = { metodo: 'puntos fijos (validación cruzada)', variantes: candidatos.map((c) => ({ tipo: c.tipo, cabeza: c.hd, error: c.err, temblor: c.tem })) };
+  let eleccion = { metodo: 'puntos fijos (validación cruzada)', variantes: candidatos.map((c) => ({ tipo: c.tipo, cabeza: c.hd, blend: c.bl, error: c.err, temblor: c.tem })) };
   let seguimiento = null;
   if (pur.length >= 60) {
     // Retraso cámara+modelo: se busca el que mejor encaja el punto en movimiento con el modelo de los puntos fijos.
@@ -1401,7 +1450,7 @@ async function runCalib() {
       if (e < best) { best = e; lag = L; }
     }
     // Suavizado temporal de los rasgos (mediana de 5) y objetivo de cada muestra.
-    const keys = ['ex', 'ey', 'yaw', 'pitch', 'ear', 'Dpx', 'ecx', 'ecy'];
+    const keys = hayBlend ? ['ex', 'ey', 'yaw', 'pitch', 'ear', 'Dpx', 'ecx', 'ecy', 'bx', 'by'] : ['ex', 'ey', 'yaw', 'pitch', 'ear', 'Dpx', 'ecx', 'ecy'];
     const filasMov = [];
     for (let i = 2; i < pur.length - 2; i++) {
       const u = (pur[i].t - lag - tPur0) / PURSUIT_MS;
@@ -1418,14 +1467,14 @@ async function runCalib() {
     const errSoloPuntos = errEn(model, prueba);
     if (prueba.length >= 20) {
       const cs2 = [];
-      for (const tipo of ['lin', 'cuad']) for (const hd of conCabeza) {
-        const m = fitModel(tipo, tren, hd), err = errEn(m, prueba), tem = ruidoDe(m);
-        cs2.push({ tipo, hd, m, err, tem, score: err + tem });
+      for (const tipo of ['lin', 'cuad']) for (const hd of conCabeza) for (const bl of conBlend) {
+        const m = fitModel(tipo, tren, hd, bl), err = errEn(m, prueba), tem = ruidoDe(m);
+        cs2.push({ tipo, hd, bl, m, err, tem, score: err + tem });
       }
       cs2.sort((x, y) => x.score - y.score);
       const g = cs2[0];
       const usado = g.err < errSoloPuntos;
-      if (usado) { model = fitModel(g.tipo, filasPuntos.concat(filasMov), g.hd); eleccion = { metodo: 'punto en movimiento (datos no usados)', variantes: cs2.map((c) => ({ tipo: c.tipo, cabeza: c.hd, error: c.err, temblor: c.tem })) }; }
+      if (usado) { model = fitModel(g.tipo, filasPuntos.concat(filasMov), g.hd, g.bl); eleccion = { metodo: 'punto en movimiento (datos no usados)', variantes: cs2.map((c) => ({ tipo: c.tipo, cabeza: c.hd, blend: c.bl, error: c.err, temblor: c.tem })) }; }
       seguimiento = { muestras: filasMov.length, retrasoMs: lag, tipo: model.tipo, cabeza: model.head, errMov: usado ? g.err : errSoloPuntos, errMovDeg: errEnDeg(usado ? g.m : model, prueba), errSoloPuntos, usado };
     }
   }
@@ -1488,7 +1537,7 @@ async function runCalib() {
     o.sdEx = r4(std(p.samples.map((s) => s.ex))); o.sdEy = r4(std(p.samples.map((s) => s.ey)));
     return o;
   });
-  calib = { geo: true, trasl: true, tipo: model.tipo, eleccion, seguimiento, puntos, ppi: settings.ppi || 160, wx, wy, head: model.head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
+  calib = { geo: true, trasl: true, motor: G.motor || 'clasico', blend: model.blend, tipo: model.tipo, eleccion, seguimiento, puntos, ppi: settings.ppi || 160, wx, wy, head: model.head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
     fecha: new Date().toISOString(), calidad, err, ruido, ruidoUso, alcance, sep, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
   G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
@@ -1510,7 +1559,8 @@ async function runCalib() {
   if (earMed < 0.2) sub = 'Tus ojos se veían casi cerrados (apertura ' + earMed.toFixed(2).replace('.', ',') + '; abiertos es más de 0,25): la cámara queda por debajo de tus ojos, al mirar la pantalla bajas el párpado y apenas se ve el iris. Sube el móvil hasta la altura de los ojos o un poco por encima y recalibra. ' + sub;
   if (seguimiento) sub += 'Siguiendo el punto en movimiento (datos no usados en el ajuste): error ±' + Math.round(seguimiento.errMov * 100) + ' % (' + f1(seguimiento.errMovDeg) + '°)' +
     (seguimiento.usado ? '' : '; no mejoró, se usan solo los puntos fijos') + '. ';
-  sub += 'Elegido: modelo ' + (model.tipo === 'cuad' ? 'curvo' : 'lineal') + ', ' + (model.head ? 'con' : 'sin') + ' compensación de giro de cabeza. ';
+  sub += 'Elegido: modelo ' + (model.tipo === 'cuad' ? 'curvo' : 'lineal') + ', ' + (model.head ? 'con' : 'sin') + ' compensación de giro de cabeza' +
+    (hayBlend ? (model.blend ? ', con' : ', sin') + ' las señales de mirada del motor nuevo' : '') + '. ';
   if (grab) sub += 'Grabados ' + grab.fotogramas.length + ' fotogramas y ' + grab.imagenes.length + ' imágenes de los ojos. ';
   const floja = ['left', 'right', 'up', 'down'].filter((d) => sep[d] < 5).map((d) => nombres[d]);
   if (floja.length) sub += 'Flojas: ' + floja.join(', ') + '. Más luz de frente, sin reflejos y la cabeza quieta; o sube el suavizado en Ajustes. ';
@@ -1554,6 +1604,12 @@ function flashEdge(d) {
 
 /* ============================ Eventos ============================ */
 function bindSettings() {
+  const sm = $('sMotor'); sm.value = settings.motor || 'clasico';
+  sm.onchange = async () => {
+    settings.motor = sm.value; lsSet(LS.set, settings);
+    if (G.on) { stopCamera(); setMsg('Cambiando de motor…'); await startCamera(); }
+    setMsg('Motor ' + (settings.motor === 'nuevo' ? 'nuevo' : 'clásico') + (G.on ? ' en marcha' : '') + '. Recalibra para usarlo.');
+  };
   const map = [['sThr', 'thr', 'vThr', (v) => v + ' %'], ['sDwell', 'dwell', 'vDwell', (v) => v + ' ms'], ['sRet', 'ret', 'vRet', (v) => v + ' %'],
     ['sBlink', 'blink', 'vBlink', (v) => v + ' ms'], ['sClose', 'close', 'vClose', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s'], ['sEar', 'ear', 'vEar', (v) => v + ' %'], ['sSmooth', 'smooth', 'vSmooth', (v) => v + ' %']];
   for (const [id, key, out, fmt] of map) {
