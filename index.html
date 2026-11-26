@@ -126,6 +126,21 @@ label.chk input { width: 22px; height: 22px; }
 #mCard { border: 3px solid var(--accent); border-bottom: 3px dashed var(--muted); border-radius: 12px 12px 0 0; background: var(--soft); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); flex: none; }
 #measure input[type=range] { width: min(90vw, 420px); }
 #measure .row { width: min(90vw, 420px); }
+#scan { position: fixed; inset: 0; z-index: 45; background: var(--bg); display: none; flex-direction: column; user-select: none; }
+#scan.on { display: flex; }
+#scan .sTop { flex: none; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--line); min-height: 20vh; }
+#scan .sOut { flex: 1; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+#scan .sOut .cur { background: var(--soft); border-bottom: 3px solid var(--accent); padding: 0 2px; }
+#scan .sOut .code { color: var(--muted); font-size: 16px; }
+#scan .sBar { display: flex; gap: 6px; align-items: center; }
+#scan .sBar button { min-height: 36px; padding: 4px 10px; font-size: 14px; }
+#scan .sBar span { margin-left: auto; font-size: 12px; text-align: right; }
+#scItems { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+#scItems .it { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 3px solid var(--line); border-radius: 16px;
+  font-size: clamp(20px, 6.5vw, 32px); font-weight: 800; background: var(--panel); color: var(--ink); padding: 4px 10px; overflow-wrap: anywhere; transition: background .1s, transform .1s; }
+#scItems .it small { display: block; font-size: 15px; font-weight: 600; color: var(--muted); }
+#scItems .it.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); transform: scale(1.02); }
+#scItems .it.on small { color: var(--accent-ink); }
 #swipe { position: fixed; inset: 0; z-index: 45; background: var(--bg); display: none; flex-direction: column; touch-action: none; user-select: none; }
 #swipe.on { display: flex; }
 #swipe .sTop { flex: none; height: 24vh; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; border-bottom: 2px solid var(--line); }
@@ -172,6 +187,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <button id="modeFree" class="on">Escritura libre</button>
     <button id="modeCopy">Copiar frase</button>
     <button id="modeSwipe">Recorrido</button>
+    <button id="modeScan">Barrido</button>
   </div>
 
   <div id="targetBox" class="target" hidden></div>
@@ -234,6 +250,8 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
     <label class="chk"><input type="checkbox" id="sHead"> Probar compensación de giro de cabeza al calibrar (se usa solo si mejora)</label>
     <label class="chk"><input type="checkbox" id="sDrift"> Corregir deriva lenta del centro</label>
     <label class="chk"><input type="checkbox" id="sZoom"> Zoom digital a la zona de los ojos</label>
+    <label class="set">Barrido: tiempo en cada opción <b id="vScan"></b>
+      <input type="range" id="sScan" min="500" max="2500" step="100"></label>
     <label class="chk"><input type="checkbox" id="sPursuit"> Calibración con punto en movimiento (más fina, +16 s)</label>
     <label class="postura" style="color:var(--ink)">Motor <select id="sMotor">
       <option value="clasico">Clásico (Face Mesh)</option>
@@ -267,6 +285,18 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
 </div>
 
 <div id="closedBadge"></div>
+
+<!-- Barrido con parpadeo: las opciones se iluminan una tras otra; un parpadeo largo elige la iluminada -->
+<div id="scan" role="application" aria-label="Barrido con parpadeo">
+  <div class="sTop">
+    <div id="scOut" class="sOut" aria-live="polite"></div>
+    <div class="sBar">
+      <button id="scExit">Salir</button><button id="scCam">Activar cámara</button><button id="scSpeak">Leer</button>
+      <span id="scInfo" class="muted"></span>
+    </div>
+  </div>
+  <div id="scItems"></div>
+</div>
 
 <!-- Escritura por recorrido: teclado de zonas a pantalla completa -->
 <div id="swipe" role="application" aria-label="Escritura por recorrido">
@@ -493,7 +523,7 @@ function finishSession() {
   S.result = st;
   if (st.palabras > 0) {
     const fuente = st.porcMirada >= 80 ? 'mirada' : (st.porcMirada > 0 ? 'mixto' : 'práctica');
-    history.unshift(Object.assign({ fecha: new Date().toISOString(), modo: S.mode === 'copy' ? 'copiar' : S.mode === 'swipe' ? 'recorrido' : 'libre', fuente, texto: currentText(), objetivo: S.target || null }, st));
+    history.unshift(Object.assign({ fecha: new Date().toISOString(), modo: S.mode === 'copy' ? 'copiar' : S.mode === 'swipe' ? 'recorrido' : S.mode === 'scan' ? 'barrido' : 'libre', fuente, texto: currentText(), objetivo: S.target || null }, st));
     history = history.slice(0, 300);
     lsSet(LS.hist, history);
   }
@@ -504,7 +534,7 @@ function statsText() {
   const st = S.result || computeStats();
   const lines = [
     'EyeType · ' + new Date().toLocaleString('es-ES'),
-    'Modo: ' + (S.mode === 'copy' ? 'copiar frase' : S.mode === 'swipe' ? 'recorrido' : 'libre') + ' · entrada por mirada: ' + st.porcMirada + ' %',
+    'Modo: ' + (S.mode === 'copy' ? 'copiar frase' : S.mode === 'swipe' ? 'recorrido' : S.mode === 'scan' ? 'barrido' : 'libre') + ' · entrada por mirada: ' + st.porcMirada + ' %',
     'Tiempo: ' + fmtTime(st.segundos) + ' · PPM: ' + st.ppm + ' · palabras: ' + st.palabras + ' · caracteres: ' + st.caracteres,
     'Borrados: ' + st.borrados + ' · gestos: ' + st.gestos + ' · gestos/palabra: ' + st.gestosPorPalabra + (st.error !== null ? ' · error: ' + st.error + ' %' : ''),
     'Texto: «' + currentText() + '»' + (S.target ? ' · objetivo: «' + S.target + '»' : ''),
@@ -532,6 +562,7 @@ function setMsg(text, bad) { const m = $('msg'); if (!text) { m.hidden = true; r
 function setStatus(text, cls) { const s = $('status'); s.textContent = text; s.className = 'chip' + (cls ? ' ' + cls : ''); }
 
 function render() {
+  if (SC && SC.on) setTimeout(scanRender, 0);
   // texto
   let html = esc(currentText());
   if (S.code) {
@@ -740,7 +771,7 @@ function prepareInput() {
 }
 async function tick() {
   if (!G.on) return;
-  if (!G.busy && video.readyState >= 2) {
+  if (!G.busy && video.readyState >= 2 && video.videoWidth > 0) {
     G.busy = true;
     try {
       if (G.fl) {
@@ -763,6 +794,7 @@ function updateRoi(toV) {
   const a = toV(33), b = toV(263), c = toV(133), d = toV(362);
   const cx0 = (a.x + b.x + c.x + d.x) / 4, cy0 = (a.y + b.y + c.y + d.y) / 4;
   const D = Math.hypot(b.x - a.x, b.y - a.y);           // distancia entre esquinas externas de los ojos
+  if (!(D > 1) || !isFinite(cx0) || !isFinite(cy0)) { G.roi = null; return; }   // datos no válidos (p. ej. vídeo aún sin tamaño)
   const roll = Math.atan2(b.y - a.y, b.x - a.x);         // inclinación de la cara en la imagen (tumbado de lado ≈ ±90°)
   G.eyeBox = { cx: cx0, cy: cy0, D, roll };
   G.eyePts = [33, 133, 362, 263, 159, 145, 386, 374, 468, 473].map((i) => Object.assign({ i }, toV(i)));
@@ -910,7 +942,7 @@ function mapRaw(f) {
   return { x: n.x - G.bias.x, y: n.y - G.bias.y };
 }
 function closedThreshold() {
-  const base = calib ? calib.center.ear : 0.28;
+  const base = calib ? calib.center.ear : (G.earBase || 0.28);
   let thr = base * settings.ear / 100;
   if (calib && calib.down) thr = Math.min(thr, calib.down.ear * 0.8);
   return thr;
@@ -980,7 +1012,8 @@ function onResults(res) {
   const lm = res.multiFaceLandmarks && res.multiFaceLandmarks[0];
   const R = G.inRoi || { x: 0, y: 0, w: video.videoWidth || 640, h: video.videoHeight || 480, crop: false };
   G.lastImage = res.image; G.lastLm = lm || null;
-  if (!lm || lm.length < 478) {
+  if (lm && lm.length >= 478 && !(isFinite(lm[33].x) && isFinite(lm[263].x) && isFinite(lm[468].x))) { G.roi = null; }
+  if (!lm || lm.length < 478 || !isFinite(lm[33].x) || !isFinite(lm[468].x)) {
     G.raw = null; G.dir = null; G.buf = []; setDwellProgress(null, 0);
     if (R.crop && ++G.lostCount >= 3) { G.roi = null; G.lostCount = 0; }   // vuelve a buscar la cara en el fotograma entero
     if (t - G.lastFace > 600) setStatus('No veo la cara', 'bad');
@@ -1017,6 +1050,7 @@ function onResults(res) {
   const thr = closedThreshold();
   const closed = f.earR < thr && f.earL < thr;
   G.closedNow = closed;
+  if (!closed) G.earBase = G.earBase ? G.earBase + 0.03 * (f.ear - G.earBase) : f.ear;   // apertura normal (sin calibrar)
   if (G.rec) recFrame(f, closed, toV, (i) => lm[i].z * R.w);
   if (G.collecting) { if (closed) G.collectClosed = (G.collectClosed || 0) + 1; if (!closed && G.roiSkip <= 0) G.collecting.push(f); if (G.roiSkip > 0) G.roiSkip--; drawDebug(); return; }
   const lejos = calib && G.poseOff !== null && G.poseOff > 2;
@@ -1024,6 +1058,7 @@ function onResults(res) {
   setStatus((S.paused ? 'En pausa · ' : (!calib ? 'Sin calibrar · ' : lejos ? 'Postura distinta: recalibra · ' : 'Siguiendo · ')) + G.fps + ' fps' + (R.crop ? ' · zoom' : ''),
     S.paused || !calib || lejos ? 'warn' : 'ok');
   handleBlink(closed, t);
+  if (S.mode === 'scan') { if (!calib) setStatus('Barrido · ' + G.fps + ' fps', 'ok'); drawDebug(); return; }
   // --- suavizado y dirección ---
   if (closed || G.closing) { G.sx = null; G.sy = null; G.buf = []; G.dir = null; setDwellProgress(null, 0); drawDebug(); return; }
   if (G.roiSkip > 0) { G.roiSkip--; drawDebug(); return; }
@@ -1073,14 +1108,14 @@ function handleBlink(closed, t) {
   const badge = $('closedBadge');
   const quiet = S.paused || calibOpen();
   if (closed) {
-    if (!G.closing) { G.closing = true; G.closeStart = t; G.beeped1 = G.beeped2 = false; }
+    if (!G.closing) { G.closing = true; G.closeStart = t; G.beeped1 = G.beeped2 = false; SC.idxAtClose = SC.idx; }
     G.openCount = 0;
     const dur = t - G.closeStart;
     if (!quiet) {
       if (!G.beeped1 && dur >= settings.blink) { G.beeped1 = true; beep(440, 0.08); }
       if (!G.beeped2 && dur >= settings.close) { G.beeped2 = true; beep(1200, 0.12); }
     }
-    if (dur >= 200 && !calibOpen()) { badge.style.display = 'block'; badge.textContent = 'Ojos cerrados ' + (dur / 1000).toFixed(1) + ' s → ' + (dur >= settings.close ? 'borrar' : dur >= settings.blink ? 'aceptar' : '…'); }
+    if (dur >= 200 && !calibOpen()) { badge.style.display = 'block'; badge.textContent = 'Ojos cerrados ' + (dur / 1000).toFixed(1) + ' s → ' + (dur >= settings.close ? 'borrar' : dur >= settings.blink ? (S.mode === 'scan' ? 'elegir' : 'aceptar') : '…'); }
   } else if (G.closing) {
     G.openCount++;
     if (G.openCount >= 2) {             // dos fotogramas abiertos seguidos para cerrar el evento
@@ -1088,7 +1123,10 @@ function handleBlink(closed, t) {
       G.closing = false; badge.style.display = 'none';
       G.suppressUntil = t + 250; G.armed = false;
       if (!quiet) {
-        if (S.mode === 'swipe') {
+        if (S.mode === 'scan') {
+          if (dur >= settings.close) handleGesture('delete', 'mirada');
+          else if (dur >= settings.blink) scanSelect('mirada', SC.idxAtClose);
+        } else if (S.mode === 'swipe') {
           if (dur >= settings.close) swipeDelete('mirada');
           else if (dur >= settings.blink) swipeAccept(G.closeStart, 'mirada');
         } else if (dur >= settings.close) handleGesture('delete', 'mirada');
@@ -1611,7 +1649,7 @@ function bindSettings() {
     setMsg('Motor ' + (settings.motor === 'nuevo' ? 'nuevo' : 'clásico') + (G.on ? ' en marcha' : '') + '. Recalibra para usarlo.');
   };
   const map = [['sThr', 'thr', 'vThr', (v) => v + ' %'], ['sDwell', 'dwell', 'vDwell', (v) => v + ' ms'], ['sRet', 'ret', 'vRet', (v) => v + ' %'],
-    ['sBlink', 'blink', 'vBlink', (v) => v + ' ms'], ['sClose', 'close', 'vClose', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s'], ['sEar', 'ear', 'vEar', (v) => v + ' %'], ['sSmooth', 'smooth', 'vSmooth', (v) => v + ' %']];
+    ['sBlink', 'blink', 'vBlink', (v) => v + ' ms'], ['sClose', 'close', 'vClose', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s'], ['sEar', 'ear', 'vEar', (v) => v + ' %'], ['sSmooth', 'smooth', 'vSmooth', (v) => v + ' %'], ['sScan', 'scan', 'vScan', (v) => (v / 1000).toFixed(1).replace('.', ',') + ' s']];
   for (const [id, key, out, fmt] of map) {
     const el = $(id); el.value = settings[key]; $(out).textContent = fmt(settings[key]);
     el.oninput = () => { settings[key] = +el.value; $(out).textContent = fmt(settings[key]); lsSet(LS.set, settings); };
@@ -1626,7 +1664,79 @@ function setMode(m) {
   $('modeFree').classList.toggle('on', m === 'free'); $('modeCopy').classList.toggle('on', m === 'copy'); $('modeSwipe').classList.toggle('on', m === 'swipe');
   if (m === 'copy') nextTarget(); else resetSession(false);
   if (m === 'swipe') openSwipe(); else closeSwipe();
+  if (m === 'scan') openScan(); else closeScan();
+  $('modeScan').classList.toggle('on', m === 'scan');
 }
+
+/* ============================ Barrido con parpadeo ============================ */
+// No necesita calibración: solo detectar un parpadeo largo (fiable aunque la mirada sea imprecisa).
+// Las opciones se iluminan por turnos; un parpadeo largo elige la iluminada. Las letras van en los mismos
+// 3 grupos que el modo libre y el diccionario adivina la palabra.
+const SC = { on: false, idx: 0, items: [], timer: 0, holdUntil: 0, idxAtClose: -1 };
+function scanItems() {
+  const it = GROUPS.map((g) => ({ k: g.dir, txt: g.letters.toUpperCase().split('').join(' ') }));
+  if (S.code) {
+    const c = S.cands[S.candIdx];
+    if (c) it.push({ k: 'accept', txt: '✓ ' + c.w, sub: 'aceptar palabra' });
+    if (S.cands.length > 1) it.push({ k: 'down', txt: '↓ otra palabra', sub: (S.candIdx + 1) + ' de ' + S.cands.length });
+  }
+  if (S.code || S.words.length) it.push({ k: 'delete', txt: '⌫ borrar', sub: S.code ? 'última letra' : 'última palabra' });
+  return it;
+}
+function openScan() {
+  SC.on = true; $('scan').classList.add('on');
+  SC.idx = 0; SC.holdUntil = now() + 1500;
+  scanRender();
+  clearInterval(SC.timer);
+  SC.timer = setInterval(scanStep, 100);
+  if (!G.on) $('scInfo').textContent = 'Activa la cámara (no hace falta calibrar) o toca para elegir.';
+}
+function closeScan() { SC.on = false; $('scan').classList.remove('on'); clearInterval(SC.timer); }
+// Avanza la opción iluminada; se queda quieta mientras tienes los ojos cerrados (para no saltarse la que querías).
+function scanStep() {
+  if (!SC.on) return;
+  const t = now();
+  if (G.closing || S.paused || t < SC.holdUntil) return;
+  if (!SC.last || t - SC.last >= settings.scan) {
+    SC.last = t;
+    SC.items = scanItems();
+    if (SC.started) SC.idx = (SC.idx + 1) % SC.items.length;
+    SC.started = true;
+    if (settings.sound) beep(380, 0.015);
+    scanPaint();
+  }
+}
+function scanSelect(source, idx) {
+  SC.items = scanItems();
+  const i = idx >= 0 ? idx : SC.idx;
+  const it = SC.items[i]; if (!it) return;
+  handleGesture(it.k, source);
+  // Después de elegir, se vuelve a empezar por la primera opción, con una pausa para orientarse.
+  SC.idx = 0; SC.started = false; SC.last = 0; SC.holdUntil = now() + Math.max(600, settings.scan * 0.8);
+  scanRender();
+}
+function scanRender() {
+  if (!SC.on) return;
+  let html = esc(currentText());
+  if (S.code) {
+    const c = S.cands[S.candIdx];
+    html += (S.words.length ? ' ' : '') + '<span class="cur">' + (c ? esc(c.w) : '?') + '</span> <span class="code">' + S.code.split('').map((k) => DIR_SYM[GROUPS[+k].dir]).join('') + '</span>';
+  }
+  if (!S.words.length && !S.code) html = '<span class="muted">Cuando se ilumine el grupo de la letra que quieres, haz un parpadeo largo (o toca). Al terminar la palabra, elige «✓».</span>';
+  $('scOut').innerHTML = html;
+  SC.items = scanItems();
+  if (SC.idx >= SC.items.length) SC.idx = 0;
+  $('scItems').innerHTML = SC.items.map((it, i) => '<div class="it" data-i="' + i + '">' + esc(it.txt) + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</div>').join('');
+  $('scItems').querySelectorAll('.it').forEach((d) => { d.onclick = () => scanSelect('manual', +d.dataset.i); });
+  scanPaint();
+  const st = S.result || computeStats();
+  if (G.on || st.palabras) $('scInfo').textContent = st.palabras + ' pal. · ' + st.ppm.toFixed(1) + ' ppm' + (G.on ? '' : ' · sin cámara');
+  $('scCam').style.display = G.on ? 'none' : '';
+}
+function scanPaint() { $('scItems').querySelectorAll('.it').forEach((d, i) => d.classList.toggle('on', i === SC.idx && SC.started !== false)); }
+$('scExit').onclick = () => setMode('free');
+$('scSpeak').onclick = () => { const t = currentText(); if (t) speak(t); };
+$('scCam').onclick = async () => { await startCamera(); scanRender(); };
 
 /* ============================ Escritura por recorrido ============================ */
 // Recorres con la mirada las zonas de las letras de la palabra, sin volver al centro, y cierras con un parpadeo largo.
@@ -1808,6 +1918,7 @@ $('btnPause').onclick = () => { S.paused = !S.paused; $('btnPause').textContent 
 $('modeFree').onclick = () => setMode('free');
 $('modeCopy').onclick = () => setMode('copy');
 $('modeSwipe').onclick = () => setMode('swipe');
+$('modeScan').onclick = () => setMode('scan');
 $('btnFinish').onclick = finishSession;
 $('btnClear').onclick = () => { if (S.mode === 'copy') nextTarget(); else resetSession(false); };
 $('btnSpeak').onclick = () => {
@@ -1944,6 +2055,12 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if ($('calib').classList.contains('on')) return;
+  if (S.mode === 'scan') {
+    if (e.key === 'Escape') setMode('free');
+    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); scanSelect('manual', -1); }
+    else if (e.key === 'Backspace') { e.preventDefault(); handleGesture('delete', 'manual'); }
+    return;
+  }
   if (S.mode === 'swipe') {
     if (e.key === 'Escape') setMode('free');
     else if (e.key === 'Backspace') { e.preventDefault(); swipeDelete('manual'); }

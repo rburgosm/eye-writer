@@ -33,6 +33,14 @@ Alternativa: cualquier hosting estático con HTTPS (Netlify Drop, Cloudflare Pag
 
 La primera vez necesita red para descargar MediaPipe (cdn.jsdelivr.net, ~10 MB); después funciona sin red.
 
+## Barrido con parpadeo (modo «Barrido»)
+
+No necesita calibrar ni que la mirada sea precisa: solo detectar un **parpadeo largo** (≥ 0,4 s), que es fiable incluso cuando la estimación de la mirada no lo es. Las opciones se iluminan una tras otra (1 s cada una por defecto, ajustable en Ajustes): los 3 grupos de letras, «✓ palabra», «↓ otra palabra» y «⌫ borrar». Parpadeas largo cuando se ilumina la que quieres; se cuenta la que estaba iluminada al empezar a cerrar los ojos, y mientras los tienes cerrados el barrido se detiene. Los parpadeos normales (cortos) no eligen nada. El diccionario adivina la palabra igual que en el modo libre. Es más lento (~3–5 palabras por minuto) pero muy fiable: es el método clásico de los comunicadores para ELA. Sin cámara: toca la opción o pulsa espacio cuando esté iluminada.
+
+## Motor de detección
+
+Ajustes → Motor: **Clásico** (MediaPipe Face Mesh) o **Nuevo** (MediaPipe Tasks Face Landmarker, experimental, ~4 MB la primera vez). El nuevo además estima con una red entrenada «hacia dónde miran los ojos» (blendshapes eyeLookIn/Out/Up/Down); la calibración prueba el modelo con y sin esas señales y se queda con lo que acierta más en datos no usados. Al cambiar de motor hay que recalibrar.
+
 ## Escritura por recorrido (modo «Recorrido»)
 
 En vez de mirar a un lado y volver al centro por cada letra, recorres con la mirada las letras de la palabra, una tras otra, parándote un instante en cada una (~0,15–0,3 s), y cierras la palabra con un **parpadeo largo**. Ojos cerrados ≥ 1,5 s borra la última palabra. Debajo del texto salen 3 alternativas: mirar una 0,9 s la pone en lugar de la última palabra (o tócala). Sin cámara se practica arrastrando el dedo y parándote en cada letra.
