@@ -231,7 +231,7 @@ label.postura select { flex: 1; font: inherit; color: var(--ink); background: va
       <input type="range" id="sEar" min="35" max="75" step="5"></label>
     <label class="set">Suavizado de la mirada: <b id="vSmooth"></b>
       <input type="range" id="sSmooth" min="0" max="85" step="5"></label>
-    <label class="chk"><input type="checkbox" id="sHead"> Compensar giro de cabeza (se aplica al recalibrar)</label>
+    <label class="chk"><input type="checkbox" id="sHead"> Probar compensación de giro de cabeza al calibrar (se usa solo si mejora)</label>
     <label class="chk"><input type="checkbox" id="sDrift"> Corregir deriva lenta del centro</label>
     <label class="chk"><input type="checkbox" id="sZoom"> Zoom digital a la zona de los ojos</label>
     <label class="chk"><input type="checkbox" id="sPursuit"> Calibración con punto en movimiento (más fina, +16 s)</label>
@@ -865,7 +865,7 @@ function mapRaw(f) {
     return { x: dot(calib.wx) - G.bias.x, y: dot(calib.wy) - G.bias.y };
   }
   const d = G.dist || calib.d0;
-  const E = calib.head ? eyePosCm(f, d) : calib.E0;
+  const E = (calib.trasl || calib.head) ? eyePosCm(f, d) : calib.E0;
   const n = cmToNorm(gazePointCm(f, calib, d, E));
   return { x: n.x - G.bias.x, y: n.y - G.bias.y };
 }
@@ -1333,17 +1333,48 @@ async function runCalib() {
   const kd = d0 * median(all.map((s) => s.Dpx));                   // distancia = kd / separación de los ojos en píxeles
   const kdF = kd / camF();                                         // sin depender de la resolución de la cámara
   const dOf = (f) => kd / f.Dpx;
-  const Eof = (f) => (head ? eyePosCm(f, dOf(f)) : eyePosCm(center, d0));
+  const Eof = (f) => eyePosCm(f, dOf(f));     // posición del ojo: solo usa la posición 2D de la cara en la imagen
   const target = (f, n) => { const P = normToCm(n.x, n.y), d = dOf(f), E = Eof(f); return { cm: P, tx: (P.x - E.x) / d, ty: (P.y - E.y) / d }; };
   for (const p of pts) { const tg = target(p.med, p.pt); p.cm = tg.cm; p.tx = tg.tx; p.ty = tg.ty; }
   const lam = 0.3, W_PUNTO = 6;
-  const fitModel = (tipo, filas) => {
-    const rows = filas.map((r) => featVec(r.f, head, ear0, tipo));
-    return { head, center, tipo, wx: fitLinear(rows, filas.map((r) => r.tx), lam, filas.map((r) => r.w)), wy: fitLinear(rows, filas.map((r) => r.ty), lam, filas.map((r) => r.w)) };
+  const fitModel = (tipo, filas, hd) => {
+    const rows = filas.map((r) => featVec(r.f, hd, ear0, tipo));
+    return { head: hd, center, tipo, wx: fitLinear(rows, filas.map((r) => r.tx), lam, filas.map((r) => r.w)), wy: fitLinear(rows, filas.map((r) => r.ty), lam, filas.map((r) => r.w)) };
   };
   const filasPuntos = pts.map((p) => ({ f: p.med, tx: p.tx, ty: p.ty, w: W_PUNTO }));
-  let model = fitModel('lin', filasPuntos);
   const predM = (m, f) => cmToNorm(gazePointCm(f, m, dOf(f), Eof(f)));
+  // Temblor en reposo tras el mismo filtro que al escribir (mediana de 5 + media exponencial).
+  const filtraN = (arr) => {
+    const out = [], buf = []; let sx = null, sy = null; const a = 1 - settings.smooth / 100;
+    for (const p of arr) {
+      buf.push(p); if (buf.length > 5) buf.shift();
+      const mx = median(buf.map((q) => q.x)), my = median(buf.map((q) => q.y));
+      sx = sx === null ? mx : sx + a * (mx - sx); sy = sy === null ? my : sy + a * (my - sy);
+      out.push({ x: sx, y: sy });
+    }
+    return out.slice(5);
+  };
+  const ruidoDe = (m) => {
+    const a = filtraN(pts[0].samples.map((f) => predM(m, f))).concat(filtraN(pts[pts.length - 1].samples.map((f) => predM(m, f))));
+    return Math.max(0.01, std(a.map((p) => p.x)), std(a.map((p) => p.y)));
+  };
+  // Error de cada punto fijo con un ajuste hecho SIN ese punto (validación cruzada).
+  const looErr = (tipo, hd) => {
+    let e = 0;
+    for (let i = 0; i < filasPuntos.length; i++) {
+      const m = fitModel(tipo, filasPuntos.filter((_, j) => j !== i), hd), q = predM(m, pts[i].med);
+      e += Math.hypot(q.x - pts[i].pt.x, q.y - pts[i].pt.y);
+    }
+    return e / filasPuntos.length;
+  };
+  // Se prueban variantes y se queda la que menos falla con datos no usados + menos tiembla.
+  // La compensación del giro de cabeza usa la profundidad (z) de MediaPipe, que en una cámara real puede
+  // temblar tanto como la propia señal del ojo: por eso se elige con datos, no a ciegas.
+  const conCabeza = settings.head ? [false, true] : [false];
+  let candidatos = conCabeza.map((hd) => { const m = fitModel('lin', filasPuntos, hd), err = looErr('lin', hd), tem = ruidoDe(m); return { tipo: 'lin', hd, m, err, tem, score: err + tem }; });
+  candidatos.sort((x, y) => x.score - y.score);
+  let model = candidatos[0].m;
+  let eleccion = { metodo: 'puntos fijos (validación cruzada)', variantes: candidatos.map((c) => ({ tipo: c.tipo, cabeza: c.hd, error: c.err, temblor: c.tem })) };
   let seguimiento = null;
   if (pur.length >= 60) {
     // Retraso cámara+modelo: se busca el que mejor encaja el punto en movimiento con el modelo de los puntos fijos.
@@ -1368,14 +1399,17 @@ async function runCalib() {
     const errEn = (m, filas) => filas.reduce((a, r) => { const q = predM(m, r.f); return a + Math.hypot(q.x - r.o.x, q.y - r.o.y); }, 0) / Math.max(1, filas.length);
     const errEnDeg = (m, filas) => filas.reduce((a, r) => { const q = gazePointCm(r.f, m, dOf(r.f), Eof(r.f)); return a + Math.hypot(Math.atan(q.tx) - Math.atan(r.tx), Math.atan(q.ty) - Math.atan(r.ty)) * 180 / Math.PI; }, 0) / Math.max(1, filas.length);
     const errSoloPuntos = errEn(model, prueba);
-    const cand = { lin: fitModel('lin', tren), cuad: fitModel('cuad', tren) };
-    const eLin = errEn(cand.lin, prueba), eCuad = errEn(cand.cuad, prueba);
-    const tipo = eCuad < eLin * 0.95 ? 'cuad' : 'lin';
-    if (prueba.length >= 20 && Math.min(eLin, eCuad) < errSoloPuntos) {
-      model = fitModel(tipo, filasPuntos.concat(filasMov));
-      seguimiento = { muestras: filasMov.length, retrasoMs: lag, tipo, errMov: Math.min(eLin, eCuad), errMovDeg: errEnDeg(cand[tipo], prueba), errSoloPuntos, errLin: eLin, errCuad: eCuad, usado: true };
-    } else {
-      seguimiento = { muestras: filasMov.length, retrasoMs: lag, tipo: 'lin', errMov: errSoloPuntos, errMovDeg: errEnDeg(model, prueba), errSoloPuntos, errLin: eLin, errCuad: eCuad, usado: false };
+    if (prueba.length >= 20) {
+      const cs2 = [];
+      for (const tipo of ['lin', 'cuad']) for (const hd of conCabeza) {
+        const m = fitModel(tipo, tren, hd), err = errEn(m, prueba), tem = ruidoDe(m);
+        cs2.push({ tipo, hd, m, err, tem, score: err + tem });
+      }
+      cs2.sort((x, y) => x.score - y.score);
+      const g = cs2[0];
+      const usado = g.err < errSoloPuntos;
+      if (usado) { model = fitModel(g.tipo, filasPuntos.concat(filasMov), g.hd); eleccion = { metodo: 'punto en movimiento (datos no usados)', variantes: cs2.map((c) => ({ tipo: c.tipo, cabeza: c.hd, error: c.err, temblor: c.tem })) }; }
+      seguimiento = { muestras: filasMov.length, retrasoMs: lag, tipo: model.tipo, cabeza: model.head, errMov: usado ? g.err : errSoloPuntos, errMovDeg: errEnDeg(usado ? g.m : model, prueba), errSoloPuntos, usado };
     }
   }
   const wx = model.wx, wy = model.wy;
@@ -1437,7 +1471,7 @@ async function runCalib() {
     o.sdEx = r4(std(p.samples.map((s) => s.ex))); o.sdEy = r4(std(p.samples.map((s) => s.ey)));
     return o;
   });
-  calib = { geo: true, tipo: model.tipo, seguimiento, puntos, ppi: settings.ppi || 160, wx, wy, head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
+  calib = { geo: true, trasl: true, tipo: model.tipo, eleccion, seguimiento, puntos, ppi: settings.ppi || 160, wx, wy, head: model.head, center, down: byKey('down'), pose, postura, kdF, d0, E0: eyePosCm(center, d0),
     fecha: new Date().toISOString(), calidad, err, ruido, ruidoUso, alcance, sep, deriva, dirErr, errDeg, ruidoDeg, spanX, spanY };
   G.dist = d0;
   perfiles.lista[postura] = calib; perfiles.activa = postura; savePerfiles(); renderPosturas();
@@ -1456,7 +1490,8 @@ async function runCalib() {
   let sub = 'Calidad ' + calidad + ': ' + porDir + '. A ' + Math.round(d0) + ' cm la pantalla abarca ' + Math.round(spanX) + '° × ' + Math.round(spanY) + '°; error medio ' + f1(errDeg) + '° (' + Math.round(err * 100) + ' %); temblor ±' +
     Math.round(ruidoUso * 100) + ' % suavizado (±' + f1(ruidoDeg) + '° sin suavizar). ';
   if (seguimiento) sub += 'Siguiendo el punto en movimiento (datos no usados en el ajuste): error ±' + Math.round(seguimiento.errMov * 100) + ' % (' + f1(seguimiento.errMovDeg) + '°)' +
-    (seguimiento.usado ? (seguimiento.tipo === 'cuad' ? ', modelo curvo. ' : ', modelo lineal. ') : '; no mejoró, se usan solo los puntos fijos. ');
+    (seguimiento.usado ? '' : '; no mejoró, se usan solo los puntos fijos') + '. ';
+  sub += 'Elegido: modelo ' + (model.tipo === 'cuad' ? 'curvo' : 'lineal') + ', ' + (model.head ? 'con' : 'sin') + ' compensación de giro de cabeza. ';
   if (grab) sub += 'Grabados ' + grab.fotogramas.length + ' fotogramas y ' + grab.imagenes.length + ' imágenes de los ojos. ';
   const floja = ['left', 'right', 'up', 'down'].filter((d) => sep[d] < 5).map((d) => nombres[d]);
   if (floja.length) sub += 'Flojas: ' + floja.join(', ') + '. Más luz de frente, sin reflejos y la cabeza quieta; o sube el suavizado en Ajustes. ';
